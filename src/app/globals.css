@@ -1,26 +1,220 @@
-@import "tailwindcss";
+@import "tailwindcss/preflight";
+@import "tailwindcss/utilities";
+@import "tailwindcss/theme" layer(theme);
 
+/* ---- Design tokens ---- */
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  --bg: #fafafa;
+  --fg: #0a0a0a;
+  --muted: #6b7280;
+
+  --card: #ffffff;
+  --border: #e5e7eb;
+  --ring: #9ca3af; /* stronger ring */
+
+  --elevated: #ffffff;
+  --elevated-hover: #efefef; /* stronger than before */
+
+  --chip: #ffffff;
+  --chip-selected: #111827;
+  --chip-fg: #111827;
+  --chip-selected-fg: #ffffff;
+
+  --btn: #ffffff;
+  --btn-fg: #111827;
+  --btn-hover: #f0f0f0; /* slightly stronger */
+
+  --muted-surface: #f3f4f6;
+
+  --selection-bg: #e5e7eb;
+  --selection-fg: #111827;
+
+  color-scheme: light;
+}
+:root.dark {
+  --bg: #0a0a0a;
+  --fg: #f5f5f5;
+  --muted: #9ca3af;
+
+  --card: #0f0f10;
+  --border: #2a2a2e;
+  --ring: #6b7280; /* stronger ring in dark */
+
+  --elevated: #121214; /* input/card resting bg */
+  --elevated-hover: #232428; /* stronger hover delta */
+
+  --chip: #18181b;
+  --chip-selected: #e5e7eb;
+  --chip-fg: #e5e7eb;
+  --chip-selected-fg: #111827;
+
+  --btn: #18181b;
+  --btn-fg: #e5e7eb;
+  --btn-hover: #24252a;
+
+  --muted-surface: #111113;
+
+  --selection-bg: #334155;
+  --selection-fg: #e5e7eb;
+
+  color-scheme: dark;
 }
 
-@theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
-}
-
+/* Base */
+html,
 body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  background: var(--bg);
+  color: var(--fg);
+}
+::selection {
+  background: var(--selection-bg);
+  color: var(--selection-fg);
+}
+
+/* Focus ring (uniform, accessible) */
+.focus-ring {
+  outline: none;
+}
+.focus-ring:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+
+/* Buttons */
+.btn {
+  @apply inline-flex items-center gap-2 rounded-md border px-3 py-2 text-sm shadow-sm transition-colors;
+  background: var(--btn);
+  color: var(--btn-fg);
+  border-color: var(--border);
+}
+.btn:hover {
+  background: var(--btn-hover);
+}
+.btn:active {
+  transform: translateY(0.5px);
+}
+
+/* Primary button (neutral, high-contrast) */
+.btn-primary {
+  @apply inline-flex items-center gap-2 rounded-md px-3 py-2 text-sm shadow-sm transition-transform;
+  background: #111827;
+  color: #ffffff;
+}
+:root.dark .btn-primary {
+  background: #e5e7eb;
+  color: #111827;
+}
+.btn-primary:hover {
+  filter: brightness(1.06);
+}
+.btn-primary:active {
+  transform: translateY(0.5px);
+}
+
+/* Inputs — fix "white flash" by using elevated bg at every state */
+.input {
+  @apply w-full rounded-md border px-3 py-2 text-sm transition-colors;
+  background: var(--elevated);
+  color: var(--fg);
+  border-color: var(--border);
+}
+.input::placeholder {
+  color: var(--muted);
+}
+.input:hover {
+  background: var(--elevated-hover);
+}
+.input:focus,
+.input:focus-visible {
+  background: var(--elevated);
+}
+
+/* Cards */
+.card {
+  @apply rounded-lg border p-4 shadow-sm;
+  background: var(--card);
+  border-color: var(--border);
+  color: var(--fg);
+}
+
+/* Chips */
+.chip {
+  @apply rounded-full border px-3 py-1.5 text-sm transition-colors;
+  background: var(--chip);
+  color: var(--chip-fg);
+  border-color: var(--border);
+}
+.chip[data-selected="true"] {
+  background: var(--chip-selected);
+  color: var(--chip-selected-fg);
+  border-color: transparent;
+}
+
+/* Code-ish block used as KaTeX fallback */
+.code-block {
+  @apply overflow-x-auto whitespace-pre rounded p-2 text-sm;
+  background: var(--muted-surface);
+  color: var(--fg);
+}
+
+/* Toasts */
+.toast-wrap {
+  @apply fixed z-50 inset-x-0 bottom-4 flex justify-center px-4 pointer-events-none;
+}
+.toast {
+  @apply pointer-events-auto rounded-md border px-3 py-2 text-sm shadow-md;
+  background: var(--card);
+  color: var(--fg);
+  border-color: var(--border);
+  transition: transform 120ms ease, opacity 120ms ease;
+}
+.toast[data-state="in"] {
+  transform: translateY(0);
+  opacity: 1;
+}
+.toast[data-state="out"] {
+  transform: translateY(8px);
+  opacity: 0;
+}
+
+/* Simple modal */
+.modal-overlay {
+  @apply fixed inset-0 z-50;
+  background: rgba(0, 0, 0, 0.4);
+}
+.modal-card {
+  @apply mx-auto w-full max-w-xl rounded-lg border p-4 shadow-lg;
+  background: var(--card);
+  color: var(--fg);
+  border-color: var(--border);
+}
+
+/* Small keyboard hint */
+.kbd {
+  @apply inline-flex items-center rounded border px-1 text-xs;
+  border-color: var(--border);
+  background: var(--card);
+}
+
+/* Segmented control for theme */
+.segmented {
+  display: inline-flex;
+  border: 1px solid var(--border);
+  border-radius: 0.5rem;
+  background: var(--card);
+  overflow: hidden;
+}
+.segmented .btn {
+  border: 0;
+  background: transparent;
+  color: var(--fg);
+}
+.segmented .btn + .btn {
+  border-left: 1px solid var(--border);
+}
+.segmented .btn[aria-pressed="true"] {
+  background: var(--chip-selected);
+  color: var(--chip-selected-fg);
+  outline: 2px solid var(--ring);
+  outline-offset: -2px; /* keep outline inside */
 }

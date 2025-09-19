@@ -1,3 +1,6 @@
+Prompt:
+Make me a site that will take 5 minutes to set up and host on vercel that will have a super clean design, one click copy (maybe even different formats) and will have a smart search feature and self ordering and reranking/grouping/labeling of common math and physics constants and equations, use these as a starting point: https://courses.physics.illinois.edu/phys101/sp2025/formula_sheet.pdf https://cdn.static.fykos.cz/physics-brawl-online-2024/konstantovnik_en.pdf Keep it for general calcuations and up to physics 1-2 level and practical. Also make a way to add extra formulas, not sure how you changes would be saved but make it happen.
+
 This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
 
 ## Getting Started
