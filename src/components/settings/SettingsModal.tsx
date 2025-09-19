@@ -51,13 +51,12 @@ export default function SettingsModal({
         {/* Theme */}
         <section>
           <h4 className="text-sm font-medium">Theme</h4>
-          <div className="mt-2 segmented" role="tablist" aria-label="Theme">
+          <div className="mt-2 segmented">
             <button
               className="btn"
               aria-pressed={theme === "auto"}
               onClick={() => setTheme("auto")}
               title="Follow your OS setting and update automatically."
-              role="tab"
             >
               Auto
             </button>
@@ -66,7 +65,6 @@ export default function SettingsModal({
               aria-pressed={theme === "light"}
               onClick={() => setTheme("light")}
               title="Force light theme."
-              role="tab"
             >
               Light
             </button>
@@ -75,7 +73,6 @@ export default function SettingsModal({
               aria-pressed={theme === "dark"}
               onClick={() => setTheme("dark")}
               title="Force dark theme."
-              role="tab"
             >
               Dark
             </button>

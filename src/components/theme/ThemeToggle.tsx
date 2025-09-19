@@ -4,7 +4,7 @@ import { useTheme } from "./ThemeProvider";
 import { Laptop, Moon, Sun } from "lucide-react";
 
 export default function ThemeToggle() {
-  const { theme, setTheme, isDark } = useTheme();
+  const { theme, setTheme } = useTheme();
 
   return (
     <div className="inline-flex rounded-md border token-border token-card shadow-sm">

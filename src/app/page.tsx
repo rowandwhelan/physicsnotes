@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Fuse from "fuse.js";
 import {
   Search,
@@ -28,7 +28,6 @@ import { getPrefs, setPrefs, Prefs } from "@/lib/prefs";
 import { buildCopy } from "@/lib/copy";
 import clsx from "clsx";
 import Menu from "@/components/ui/Menu";
-import Link from "next/link";
 
 /* ----------------- Setup ----------------- */
 
@@ -44,6 +43,8 @@ const categoryOrder: Record<string, number> = {
   Thermodynamics: 7,
   Constants: 99,
 };
+
+type HasRank = { rank?: number };
 
 type Ranked = Item & { score: number };
 
@@ -105,6 +106,18 @@ export default function Page() {
   const usage = storage.getUsage();
   const recent = storage.getRecent();
 
+  const handleCopy = useCallback(
+    async (i: Item, p: Prefs) => {
+      const text = buildCopy(i, p);
+      await navigator.clipboard.writeText(text);
+      storage.markUsed(i.id);
+      setCopiedId(i.id);
+      toast("Copied");
+      setTimeout(() => setCopiedId((x) => (x === i.id ? null : x)), 900);
+    },
+    [toast]
+  );
+
   const ranked = useMemo(() => {
     const base: Ranked[] =
       query.trim().length === 0
@@ -126,8 +139,9 @@ export default function Page() {
       mix.sort((a, b) => b.score - a.score);
     } else {
       mix.sort((a, b) => {
-        const ra = (a as any).rank ?? Number.POSITIVE_INFINITY;
-        const rb = (b as any).rank ?? Number.POSITIVE_INFINITY;
+        const ra = (a as HasRank).rank ?? Number.POSITIVE_INFINITY;
+        const rb = (b as HasRank).rank ?? Number.POSITIVE_INFINITY;
+
         if (ra !== rb) return ra - rb;
         const pa = a.popularity ?? 0;
         const pb = b.popularity ?? 0;
@@ -143,40 +157,23 @@ export default function Page() {
     function onKey(e: KeyboardEvent) {
       const onSearch = document.activeElement === searchRef.current;
 
-      // Focus search
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "k") {
         e.preventDefault();
         searchRef.current?.focus();
         return;
       }
 
-      // Copy top result only with Ctrl/Cmd+Enter while focus is in the search box
-      if (
-        onSearch &&
-        (e.ctrlKey || e.metaKey) &&
-        e.key === "Enter" &&
-        !e.isComposing // avoid IME composition edge-cases
-      ) {
+      if (onSearch && (e.ctrlKey || e.metaKey) && e.key === "Enter" && !e.isComposing) {
         e.preventDefault();
         const first = ranked[0];
         if (first) handleCopy(first, prefs);
       }
     }
-
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [prefs, ranked]);
+  }, [prefs, ranked, handleCopy]);
 
   /* ---------- Actions ---------- */
-
-  async function handleCopy(i: Item, p: Prefs) {
-    const text = buildCopy(i, p);
-    await navigator.clipboard.writeText(text);
-    storage.markUsed(i.id);
-    setCopiedId(i.id);
-    toast("Copied");
-    setTimeout(() => setCopiedId((x) => (x === i.id ? null : x)), 900);
-  }
 
   function onAdd(payload: NewItemInput) {
     const newItem: Item = {
@@ -450,8 +447,8 @@ function groupByCategory(list: Item[]): [string, Item[]][] {
   );
   return sections.map(([cat, items]) => {
     items.sort((a, b) => {
-      const ra = (a as any).rank ?? Number.POSITIVE_INFINITY;
-      const rb = (b as any).rank ?? Number.POSITIVE_INFINITY;
+      const ra = (a as HasRank).rank ?? Number.POSITIVE_INFINITY;
+      const rb = (b as HasRank).rank ?? Number.POSITIVE_INFINITY;
       if (ra !== rb) return ra - rb;
       const pa = a.popularity ?? 0;
       const pb = b.popularity ?? 0;
