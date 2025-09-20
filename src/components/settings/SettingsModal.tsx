@@ -8,6 +8,7 @@ import Modal from "../Modal";
 import { Storage } from "@/lib/storage";
 import { seedItems } from "@/lib/seed";
 import { Import, Download, RefreshCw, ChevronDown } from "lucide-react";
+import type { Item } from "@/lib/types";
 
 const storage = new Storage();
 
@@ -20,14 +21,14 @@ const presetHints: Record<CopyPreset, string> = {
   markdown_fenced: "Markdown with a fenced ```tex block.",
 };
 
-const toggleHints = {
+const toggleHints: Record<keyof Prefs["copyToggles"], string> = {
   includeUnits: "If on, constants include units, e.g., m s^-2.",
   includeName: "Include the item name.",
   includeSymbol: "Include the symbol, e.g., g, c, k_B.",
   includeText: "Include the short description/note.",
   includeCategory: "Append the category as a trailing code-style comment.",
   includeSource: "Append the source as a trailing code-style comment.",
-} as const;
+};
 
 export default function SettingsModal({
   open,
@@ -78,24 +79,33 @@ export default function SettingsModal({
     URL.revokeObjectURL(url);
   }
 
+  type ImportShape = Item[] | { items: Item[]; prefs?: Prefs };
+
+  function isItem(x: unknown): x is Item {
+    if (!x || typeof x !== "object") return false;
+    const o = x as Record<string, unknown>;
+    return typeof o.id === "string" && (o.kind === "constant" || o.kind === "equation") && typeof o.name === "string";
+  }
+
   function onImportFile(f: File) {
     const reader = new FileReader();
     reader.onload = () => {
       try {
-        const json = JSON.parse(String(reader.result));
-        if (Array.isArray(json)) {
-          storage.bulkUpsert(json);
-        } else if (json && Array.isArray(json.items)) {
-          storage.bulkUpsert(json.items);
-          if (json.prefs) setPrefs(json.prefs);
-        } else {
-          alert("Invalid JSON format.");
-          return;
-        }
+        const parsed = JSON.parse(String(reader.result)) as ImportShape;
+        const items = Array.isArray(parsed) ? parsed : parsed.items;
+        if (!Array.isArray(items)) throw new Error("Invalid shape");
+
+        const good = items.filter(isItem);
+        if (good.length === 0) throw new Error("No valid items");
+
+        storage.bulkUpsert(good);
+        if (!Array.isArray(parsed) && parsed.prefs) setPrefs(parsed.prefs);
+
         onDataChange?.();
         setLocal(getPrefs());
-      } catch {
-        alert("Invalid JSON");
+        alert(`Imported ${good.length} item(s).`);
+      } catch (e) {
+        alert("Invalid JSON: " + (e as Error).message);
       }
     };
     reader.readAsText(f);
@@ -108,9 +118,13 @@ export default function SettingsModal({
     onDataChange?.();
   }
 
+  function hasResetLearning(x: unknown): x is { resetLearning: () => void } {
+    return !!x && typeof (x as any).resetLearning === "function";
+  }
+
   function resetLearning() {
-    if (typeof (storage as any).resetLearning === "function") {
-      (storage as any).resetLearning();
+    if (hasResetLearning(storage)) {
+      storage.resetLearning();
     }
     onDataChange?.();
   }
@@ -223,7 +237,7 @@ export default function SettingsModal({
                 ["includeText", "Include description"],
               ] as Array<[keyof Prefs["copyToggles"], string]>
             ).map(([key, label]) => (
-              <label key={key} className="flex items-center gap-2 text-sm" title={(toggleHints as any)[key]}>
+              <label key={key} className="flex items-center gap-2 text-sm" title={toggleHints[key]}>
                 <input
                   type="checkbox"
                   checked={prefs.copyToggles[key]}
@@ -262,7 +276,7 @@ export default function SettingsModal({
                         ["includeSource", "Include source (as comment)"],
                       ] as Array<[keyof Prefs["copyToggles"], string]>
                     ).map(([key, label]) => (
-                      <label key={key} className="flex items-center gap-2 text-sm" title={(toggleHints as any)[key]}>
+                      <label key={key} className="flex items-center gap-2 text-sm" title={toggleHints[key]}>
                         <input
                           type="checkbox"
                           checked={prefs.copyToggles[key]}
@@ -318,12 +332,11 @@ export default function SettingsModal({
                       Instant re-rank after copy
                     </label>
                   </div>
-
-                  <div className="mt-2 flex flex-wrap gap-2">
-                    <Button onClick={onApplyUsageNow}>Apply usage now</Button>
-                    <Button onClick={resetLearning}>Reset ranking history</Button>
-                  </div>
                 </div>
+
+                <p className="text-xs" style={{ color: "var(--muted)" }}>
+                  Ranks refresh on reload or when switching mode. Turn on “Instant re-rank” to update immediately.
+                </p>
 
                 {/* Data */}
                 <div>

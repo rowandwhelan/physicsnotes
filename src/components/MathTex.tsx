@@ -22,11 +22,6 @@ export default function MathTex({ latex }: { latex: string }) {
   }, [latex]);
 
   return (
-    <span
-      data-display={displayMode ? "true" : "false"}
-      className="katex"
-      // eslint-disable-next-line react/no-danger
-      dangerouslySetInnerHTML={{ __html: html }}
-    />
+    <span data-display={displayMode ? "true" : "false"} className="katex" dangerouslySetInnerHTML={{ __html: html }} />
   );
 }

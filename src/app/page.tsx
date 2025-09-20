@@ -200,7 +200,6 @@ export default function Page() {
     fuse,
     query,
     category,
-    learnTick,
     prefs.rankingMode,
     prefs.rankingHalfLifeDays,
     prefs.instantRerankOnCopy,
@@ -229,7 +228,10 @@ export default function Page() {
 
       // Prevent accidental Enter copies on the bare page when query is empty
       if (wantsCopy && !e.isComposing) {
+        // if the query is empty and not in the search box, do nothing
         if (!onSearch && query.trim().length === 0) return;
+        // if nothing is rendered, do nothing
+        if (ranked.length === 0) return;
         const first = ranked[0];
         if (first) {
           e.preventDefault();
@@ -242,7 +244,7 @@ export default function Page() {
   }, [prefs, ranked, handleCopy, showAdd, showSettings, query]);
 
   // Rerank mode pulse (soften the reordering perception)
-  const handleRerankModeChange = useCallback((mode: Prefs["rankingMode"]) => {
+  const handleRerankModeChange = useCallback(() => {
     setRerankPulse((x) => x + 1);
   }, []);
 
@@ -344,6 +346,21 @@ export default function Page() {
           </div>
         </HScroll>
       </section>
+
+      {/* Empty state */}
+      {ranked.length === 0 && (
+        <div className="mt-10 grid place-items-center">
+          <div className="text-center">
+            <div className="text-lg font-medium">No matches</div>
+            <p className="mt-1 text-sm" style={{ color: "var(--muted)" }}>
+              Try a different search or add a new item.
+            </p>
+            <div className="mt-3">
+              <Button onClick={() => setShowAdd(true)}>Add item</Button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Results (pulse key to trigger a light fade-in) */}
       <section key={rerankPulse} className="mt-8 space-y-8">
