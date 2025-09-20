@@ -1,37 +1,32 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import { useMemo } from "react";
+import katex from "katex";
+import "katex/dist/katex.min.css";
 
 export default function MathTex({ latex }: { latex: string }) {
-  const ref = useRef<HTMLSpanElement>(null);
-
-  useEffect(() => {
-    let mounted = true;
-    (async () => {
-      try {
-        const katex = await import("katex");
-        if (!mounted || !ref.current) return;
-        katex.render(latex, ref.current, {
-          throwOnError: false,
-          displayMode: false,
-          trust: false,
-          strict: "warn",
-        });
-      } catch {
-        // noop; fallback below
-      }
-    })();
-    return () => {
-      mounted = false;
+  // Display if LaTeX is wrapped with $$...$$. Otherwise inline.
+  const { html, displayMode } = useMemo(() => {
+    const isBlock = /^\s*\$\$[\s\S]*\$\$\s*$/.test(latex);
+    const src = isBlock ? latex.replace(/^\s*\$\$|\$\$\s*$/g, "") : latex;
+    return {
+      displayMode: isBlock,
+      html: katex.renderToString(src, {
+        displayMode: isBlock,
+        throwOnError: false,
+        strict: "ignore",
+        trust: true,
+        macros: {},
+      }),
     };
   }, [latex]);
 
   return (
-    <span>
-      <span ref={ref} />
-      <noscript>
-        <code className="code-block">{latex}</code>
-      </noscript>
-    </span>
+    <span
+      data-display={displayMode ? "true" : "false"}
+      className="katex"
+      // eslint-disable-next-line react/no-danger
+      dangerouslySetInnerHTML={{ __html: html }}
+    />
   );
 }

@@ -4,11 +4,9 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Fuse from "fuse.js";
 import { Search, Clipboard, Check, MoreVertical, Plus, Settings as SettingsIcon, X } from "lucide-react";
 import Button from "@/components/ui/Button";
-import Input from "@/components/ui/Input";
 import Card from "@/components/ui/Card";
 import SettingsModal from "@/components/settings/SettingsModal";
 import { useToast } from "@/components/toast/ToastProvider";
-
 import { seedItems } from "@/lib/seed";
 import { Item, NewItemInput } from "@/lib/types";
 import { Storage } from "@/lib/storage";
@@ -70,6 +68,17 @@ export default function Page() {
       setItems(seedItems);
     } else {
       setItems(stored);
+    }
+  }, []);
+
+  // Open Settings if URL has ?open=settings (used by docs link)
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const params = new URLSearchParams(window.location.search);
+    if (params.get("open") === "settings") {
+      setShowSettings(true);
+      // clean URL (no reload)
+      window.history.replaceState(null, "", window.location.pathname);
     }
   }, []);
 
@@ -199,10 +208,18 @@ export default function Page() {
     recentSnapshot,
   ]);
 
-  // Keyboard: Ctrl/Cmd+K focuses search; Enter copies top match (with visuals)
+  // Keyboard:
+  // - Ctrl/Cmd+K focuses search
+  // - Enter copies top result when NO modal is open, regardless of focus (so it works on the page or inside the search)
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
+      const modalOpen = showAdd || showSettings;
+      if (modalOpen) return;
+
       const onSearch = document.activeElement === searchRef.current;
+      const wantsCopy =
+        (e.key === "Enter" && onSearch) || // Enter in search
+        ((e.ctrlKey || e.metaKey) && e.key === "Enter"); // Ctrl/Cmd+Enter anywhere
 
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "k") {
         e.preventDefault();
@@ -210,32 +227,31 @@ export default function Page() {
         return;
       }
 
-      if (onSearch && e.key === "Enter" && !e.isComposing) {
-        e.preventDefault();
+      // Prevent accidental Enter copies on the bare page when query is empty
+      if (wantsCopy && !e.isComposing) {
+        if (!onSearch && query.trim().length === 0) return;
         const first = ranked[0];
-        if (first) handleCopy(first, prefs);
+        if (first) {
+          e.preventDefault();
+          handleCopy(first, prefs);
+        }
       }
     }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [prefs, ranked, handleCopy]);
+  }, [prefs, ranked, handleCopy, showAdd, showSettings, query]);
 
   // Rerank mode pulse (soften the reordering perception)
-  const handleRerankModeChange = useCallback(
-    (mode: Prefs["rankingMode"]) => {
-      toast(mode === "popularityFirst" ? "Popularity-first ranking enabled" : "Explicit order enabled");
-      setRerankPulse((x) => x + 1);
-    },
-    [toast]
-  );
+  const handleRerankModeChange = useCallback((mode: Prefs["rankingMode"]) => {
+    setRerankPulse((x) => x + 1);
+  }, []);
 
-  // Apply usage to frozen snapshot (manual recompute without turning on instant)
+  // Apply usage to frozen snapshot (manual recompute without enabling instant)
   const handleApplyUsageNow = useCallback(() => {
     setUsageSnapshot(storage.getUsage());
     setRecentSnapshot(storage.getRecent());
     setRerankPulse((x) => x + 1);
-    toast("Ranking updated");
-  }, [toast]);
+  }, []);
 
   /* ---------- Actions ---------- */
 
@@ -284,7 +300,7 @@ export default function Page() {
       {/* Command bar */}
       <section className="mt-6 flex flex-col gap-3">
         <label
-          className="group/input flex items-center gap-2 rounded-md border px-3 py-2 shadow-sm
+          className="group/input relative flex items-center gap-2 rounded-md border px-3 py-2 shadow-sm
              focus-within:outline-2 focus-within:outline-offset-2 [outline-color:var(--ring)]"
           style={{ background: "var(--card)", borderColor: "var(--border)" }}
         >
@@ -292,13 +308,24 @@ export default function Page() {
           <input
             ref={searchRef}
             aria-label="Search formulas and constants"
-            placeholder="Search by name, symbol, tags, or text… (Enter to copy top match)"
+            placeholder="Search by name, symbol, tags, or text…"
             value={query}
             onChange={(e) => setQuery(e.currentTarget.value)}
             className="w-full bg-transparent text-sm placeholder:[color:var(--muted)]
-               outline-none focus:outline-none focus-visible:outline-none
-               ring-0 focus:ring-0 border-0"
+               outline-none focus:outline-none focus-visible:outline-none ring-0 border-0"
           />
+          {query.length > 0 && (
+            <button
+              aria-label="Clear search"
+              className="absolute right-2 inline-flex h-6 w-6 items-center justify-center rounded hover:[background:var(--elevated-hover)]"
+              onClick={() => {
+                setQuery("");
+                searchRef.current?.focus();
+              }}
+            >
+              <X className="h-4 w-4" />
+            </button>
+          )}
         </label>
 
         <HScroll className="-mx-1 overflow-x-auto pb-1">
@@ -316,11 +343,6 @@ export default function Page() {
             ))}
           </div>
         </HScroll>
-
-        <div className="text-xs text-[var(--muted)]">
-          Tip: Press <span className="kbd">Ctrl</span>/<span className="kbd">Cmd</span> + <span className="kbd">K</span>{" "}
-          to jump to search; <span className="kbd">Enter</span> copies the top match.
-        </div>
       </section>
 
       {/* Results (pulse key to trigger a light fade-in) */}
@@ -360,13 +382,17 @@ export default function Page() {
                       </p>
                     )}
 
-                    {i.value && (
+                    {/* show value/units only for constants (unless LaTeX rendering is enabled) */}
+                    {i.kind === "constant" && !prefs.showConstantLatex && i.value && (
                       <p className="mt-1 font-mono text-sm">
                         {i.value} {i.units ?? ""}
                       </p>
                     )}
 
-                    {i.latex && (
+                    {/* show LaTeX:
+    - equations always,
+    - constants only if user enabled it and LaTeX exists */}
+                    {(i.kind === "equation" || (i.kind === "constant" && prefs.showConstantLatex)) && i.latex && (
                       <div className="mt-2">
                         <MathTex latex={i.latex} />
                       </div>
@@ -455,7 +481,7 @@ export default function Page() {
         ))}
       </section>
 
-      {/* Guided Add Modal (uses shared Modal to prevent overscroll + click-out close) */}
+      {/* Guided Add Modal */}
       {showAdd && (
         <AddDialog
           open={showAdd}
@@ -558,11 +584,6 @@ function AddDialog({
   });
 
   const [errors, setErrors] = useState<{ name?: string; category?: string; value?: string }>({});
-  const nameRef = useRef<HTMLInputElement>(null);
-
-  useEffect(() => {
-    nameRef.current?.focus();
-  }, []);
 
   useEffect(() => {
     const next: typeof errors = {};
@@ -590,19 +611,6 @@ function AddDialog({
     [form]
   );
 
-  function sampleCopySafe(item: Item) {
-    try {
-      return buildPreview(item);
-    } catch {
-      if (item.kind === "constant") {
-        const unit = item.units ? ` ${item.units}` : "";
-        const val = item.value ? `${item.value}${unit}` : "";
-        return `${item.name}${item.symbol ? ` (${item.symbol})` : ""}${val ? ` = ${val}` : ""}`;
-      }
-      return `${item.name}${item.latex ? `: ${item.latex}` : item.text ? ` — ${item.text}` : ""}`;
-    }
-  }
-
   function submit() {
     if (Object.keys(errors).length > 0) return;
     if (!form.name.trim() || !form.category.trim()) return;
@@ -614,18 +622,16 @@ function AddDialog({
 
   return (
     <Modal open={open} onClose={onClose}>
-      {/* Sticky header with Cancel / Close pinned at top; click-out close handled by Modal */}
+      {/* Sticky header: Save (left), Cancel (right) */}
       <div
         className="sticky top-0 z-10 flex items-center justify-between border-b px-4 py-3 sm:px-5"
         style={{ background: "var(--card)", borderColor: "var(--border)" }}
       >
-        <button className="btn" onClick={onClose}>
-          Cancel
-        </button>
+        <Button onClick={submit} disabled={!!errors.name || !!errors.category}>
+          Save
+        </Button>
         <div className="text-sm font-medium">Add item</div>
-        <button className="btn" onClick={onClose} aria-label="Close">
-          <X className="h-4 w-4" />
-        </button>
+        <Button onClick={onClose}>Cancel</Button>
       </div>
 
       <div className="p-4 sm:p-5">
@@ -643,9 +649,6 @@ function AddDialog({
               <option value="equation">Equation</option>
               <option value="constant">Constant</option>
             </select>
-            <p className="mt-1 text-xs" style={{ color: "var(--muted)" }}>
-              Equations prefer LaTeX; constants prefer numeric value + units.
-            </p>
           </label>
 
           {/* Category */}
@@ -658,7 +661,6 @@ function AddDialog({
               className="input w-full"
               value={form.category}
               onChange={(e) => setForm({ ...form, category: e.currentTarget.value })}
-              ref={nameRef}
             />
             <datalist id="category-options">
               {categories.map((c) => (
@@ -737,10 +739,6 @@ function AddDialog({
                 value={form.latex}
                 onChange={(e) => setForm({ ...form, latex: e.currentTarget.value })}
               />
-              <p className="mt-1 text-xs" style={{ color: "var(--muted)" }}>
-                Fractions: <code>{"\\frac{a}{b}"}</code> · Roots: <code>{"\\sqrt{x}"}</code> · Subscripts:{" "}
-                <code>{"v_0"}</code> · Superscripts: <code>{"x^2"}</code>
-              </p>
             </label>
           )}
 
@@ -777,9 +775,6 @@ function AddDialog({
                 })
               }
             />
-            <p className="mt-1 text-xs" style={{ color: "var(--muted)" }}>
-              2–5 tags improves search & re-ranking.
-            </p>
           </label>
         </div>
 
@@ -791,14 +786,29 @@ function AddDialog({
           <div className="text-xs uppercase tracking-wide" style={{ color: "var(--muted)" }}>
             Preview (default copy format)
           </div>
-          <pre className="mt-1 text-sm whitespace-pre-wrap">{sampleCopySafe(preview)}</pre>
+          <pre className="mt-1 text-sm whitespace-pre-wrap">{buildPreview(preview)}</pre>
         </div>
 
-        {/* Footer actions pinned bottom (save) */}
-        <div className="mt-4 flex items-center justify-end gap-2">
-          <Button onClick={submit} disabled={!!errors.name || !!errors.category} title="Save item">
-            Save
-          </Button>
+        {/* Advanced (bottom) */}
+        <div className="mt-4 rounded-md border" style={{ background: "var(--elevated)", borderColor: "var(--border)" }}>
+          <details>
+            <summary className="cursor-pointer px-3 py-2 text-sm">Advanced</summary>
+            <div className="border-t p-3 text-sm space-y-2" style={{ borderColor: "var(--border)" }}>
+              <div>
+                <div className="font-medium">LaTeX tips</div>
+                <div className="text-xs" style={{ color: "var(--muted)" }}>
+                  Fractions: <code>{"\\frac{a}{b}"}</code> • Roots: <code>{"\\sqrt{x}"}</code> • Subscripts:{" "}
+                  <code>{"v_0"}</code> • Superscripts: <code>{"x^2"}</code>
+                </div>
+              </div>
+              <div>
+                <div className="font-medium">Tagging</div>
+                <div className="text-xs" style={{ color: "var(--muted)" }}>
+                  Add 2–5 tags to improve search and popularity-based ranking.
+                </div>
+              </div>
+            </div>
+          </details>
         </div>
       </div>
     </Modal>
