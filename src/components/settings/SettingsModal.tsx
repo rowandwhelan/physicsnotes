@@ -35,13 +35,15 @@ export default function SettingsModal({
   onClose,
   onChange,
   onDataChange,
-  onRerankModeChange, // NEW: let the page soften re-rank UX
+  onRerankModeChange,
+  onApplyUsageNow,
 }: {
   open: boolean;
   onClose: () => void;
   onChange?: (p: Prefs) => void;
   onDataChange?: () => void;
   onRerankModeChange?: (mode: Prefs["rankingMode"]) => void;
+  onApplyUsageNow?: () => void;
 }) {
   const { theme, setTheme } = useTheme();
   const [prefs, setLocal] = useState<Prefs>(getPrefs());
@@ -114,26 +116,33 @@ export default function SettingsModal({
 
   return (
     <Modal open={open} onClose={onClose}>
-      <div className="p-4 sm:p-5">
-        <h3 className="text-lg font-semibold">Settings</h3>
+      {/* Top bar pinned */}
+      <div
+        className="sticky top-0 z-10 flex items-center justify-between border-b px-4 py-3 sm:px-5"
+        style={{ background: "var(--card)", borderColor: "var(--border)" }}
+      >
+        <div className="text-sm font-medium">Settings</div>
+        <Button onClick={onClose}>Close</Button>
+      </div>
 
-        <div className="mt-4 space-y-8">
+      <div className="p-4 sm:p-5">
+        <div className="space-y-8">
           {/* Theme */}
           <section>
-            <div className="flex items-center justify-between">
+            <div className="mb-1 flex items-center justify-between">
               <h4 className="text-sm font-medium">Theme</h4>
               <span className="text-xs" style={{ color: "var(--muted)" }}>
-                Choose how the app matches your OS or stays fixed.
+                Follow OS or force a theme.
               </span>
             </div>
-            <div className="mt-2 segmented">
-              <button className="btn" data-selected={theme === "auto"} onClick={() => setTheme("auto")}>
+            <div className="segmented-like">
+              <button className="seg-btn" data-selected={theme === "auto"} onClick={() => setTheme("auto")}>
                 Auto
               </button>
-              <button className="btn" data-selected={theme === "light"} onClick={() => setTheme("light")}>
+              <button className="seg-btn" data-selected={theme === "light"} onClick={() => setTheme("light")}>
                 Light
               </button>
-              <button className="btn" data-selected={theme === "dark"} onClick={() => setTheme("dark")}>
+              <button className="seg-btn" data-selected={theme === "dark"} onClick={() => setTheme("dark")}>
                 Dark
               </button>
             </div>
@@ -199,7 +208,7 @@ export default function SettingsModal({
                 <ChevronDown className={advancedOpen ? "rotate-180 transition-transform" : "transition-transform"} />
               </button>
               {advancedOpen && (
-                <div className="border-t p-3" style={{ borderColor: "var(--border)" }}>
+                <div className="border-t p-3 space-y-3" style={{ borderColor: "var(--border)" }}>
                   <div className="grid grid-cols-2 gap-2">
                     {(
                       [
@@ -221,7 +230,7 @@ export default function SettingsModal({
                       </label>
                     ))}
                   </div>
-                  <p className="mt-2 text-xs" style={{ color: "var(--muted)" }}>
+                  <p className="text-xs" style={{ color: "var(--muted)" }}>
                     Tip: Press <span className="kbd">Enter</span> in the search box to copy the top result.
                   </p>
                 </div>
@@ -232,9 +241,9 @@ export default function SettingsModal({
           {/* Ranking */}
           <section>
             <h4 className="text-sm font-medium">Ranking</h4>
-            <div className="mt-2 segmented">
+            <div className="segmented-like">
               <button
-                className="btn"
+                className="seg-btn"
                 data-selected={(prefs.rankingMode ?? "rankFirst") === "rankFirst"}
                 onClick={() => {
                   update("rankingMode", "rankFirst");
@@ -244,7 +253,7 @@ export default function SettingsModal({
                 Explicit order
               </button>
               <button
-                className="btn"
+                className="seg-btn"
                 data-selected={prefs.rankingMode === "popularityFirst"}
                 onClick={() => {
                   update("rankingMode", "popularityFirst");
@@ -271,6 +280,27 @@ export default function SettingsModal({
                 </span>
               </label>
 
+              {/* NEW: instant re-rank toggle */}
+              <label
+                className="text-sm flex items-center gap-2"
+                title="Re-order results immediately after each copy. Default is off."
+              >
+                <input
+                  type="checkbox"
+                  checked={!!prefs.instantRerankOnCopy}
+                  onChange={(e) => update("instantRerankOnCopy", e.currentTarget.checked)}
+                />
+                Instant re-rank after copy
+              </label>
+
+              {/* NEW: manual apply usage now */}
+              <Button
+                onClick={onApplyUsageNow}
+                title="Recompute ranking using current usage without enabling instant re-rank."
+              >
+                Apply usage now
+              </Button>
+
               <Button onClick={resetLearning} title="Clears learned usage/recency; keeps your items.">
                 Reset ranking history
               </Button>
@@ -296,14 +326,14 @@ export default function SettingsModal({
 
           {/* Data */}
           <section>
-            <div className="flex items-center justify-between">
+            <div className="mb-1 flex items-center justify-between">
               <h4 className="text-sm font-medium">Data</h4>
               <span className="text-xs" style={{ color: "var(--muted)" }}>
                 Import/export your items & settings, or restore defaults.
               </span>
             </div>
 
-            <div className="mt-2 flex flex-wrap gap-2">
+            <div className="flex flex-wrap gap-2">
               <input
                 ref={fileInputRef}
                 type="file"
@@ -328,11 +358,8 @@ export default function SettingsModal({
           </section>
         </div>
 
-        <div className="mt-6 flex gap-2 justify-between items-center">
-          <a href="/docs" className="text-xs underline">
-            Open documentation
-          </a>
-          <Button onClick={onClose}>Close</Button>
+        <div className="mt-6 flex justify-end">
+          {/* Footer left empty on purpose; Close is pinned in the top bar */}
         </div>
       </div>
     </Modal>

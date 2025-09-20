@@ -28,8 +28,10 @@ export type Prefs = {
   copyToggles: CopyToggles;
   katexInline: boolean;
   themeChoice?: "auto" | "light" | "dark";
-  rankingMode?: RankingMode; // NEW
-  rankingHalfLifeDays?: number; // NEW (decay)
+  rankingMode?: RankingMode;
+  rankingHalfLifeDays?: number;
+  /** When true, re-rank immediately after each copy. Default false. */
+  instantRerankOnCopy?: boolean;
 };
 
 function defaults(): Prefs {
@@ -45,15 +47,23 @@ function defaults(): Prefs {
     },
     katexInline: true,
     rankingMode: "rankFirst",
-    rankingHalfLifeDays: 30,
+    rankingHalfLifeDays: 30, // ~1 month
+    instantRerankOnCopy: false,
   };
 }
 
+/**
+ * Merge persisted JSON (any historical shape) onto current defaults.
+ * - Supports legacy `copyMode` -> `copyPreset` migration.
+ * - Fills any missing new fields from defaults (e.g., instantRerankOnCopy).
+ */
 function migrate(raw: string | null): Prefs {
   const def = defaults();
   if (!raw) return def;
   try {
     const obj = JSON.parse(raw) as Partial<Prefs> & { copyMode?: string };
+
+    // Legacy migration: copyMode -> copyPreset
     if (obj.copyMode && !obj.copyPreset) {
       const map: Record<string, CopyPreset> = {
         plain: "plain_compact",
@@ -62,6 +72,8 @@ function migrate(raw: string | null): Prefs {
       };
       (obj as Partial<Prefs>).copyPreset = map[obj.copyMode] ?? def.copyPreset;
     }
+
+    // Overlay onto defaults so any newly-added fields pick up defaults automatically.
     return { ...def, ...obj };
   } catch {
     return def;
@@ -74,8 +86,11 @@ export function getPrefs(): Prefs {
   return migrate(raw);
 }
 
-export function setPrefs(next: Partial<Prefs>) {
-  const merged = { ...getPrefs(), ...next };
+/**
+ * Persist a partial update and return the merged result as Prefs.
+ */
+export function setPrefs(next: Partial<Prefs>): Prefs {
+  const merged: Prefs = { ...getPrefs(), ...next };
   if (hasWindow()) window.localStorage.setItem(KEY, JSON.stringify(merged));
   return merged;
 }

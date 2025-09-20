@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Fuse from "fuse.js";
-import { Search, Clipboard, Check, MoreVertical, Plus, Settings as SettingsIcon } from "lucide-react";
+import { Search, Clipboard, Check, MoreVertical, Plus, Settings as SettingsIcon, X } from "lucide-react";
 import Button from "@/components/ui/Button";
 import Input from "@/components/ui/Input";
 import Card from "@/components/ui/Card";
@@ -18,6 +18,7 @@ import { buildCopy } from "@/lib/copy";
 import clsx from "clsx";
 import Menu from "@/components/ui/Menu";
 import HScroll from "@/components/ui/HScroll";
+import Modal from "@/components/Modal";
 
 /* ----------------- Setup ----------------- */
 
@@ -48,9 +49,15 @@ export default function Page() {
   const [showAdd, setShowAdd] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [prefs, setLocalPrefs] = useState<Prefs>(getPrefs());
+
+  // Copy UX
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [learnTick, setLearnTick] = useState(0);
-  const [rerankPulse, setRerankPulse] = useState(0); // increments on mode changes to pulse UI
+  const [rerankPulse, setRerankPulse] = useState(0);
+
+  // Frozen usage snapshot (used when instant re-rank is OFF)
+  const [usageSnapshot, setUsageSnapshot] = useState<Record<string, number>>(() => storage.getUsage());
+  const [recentSnapshot, setRecentSnapshot] = useState<Record<string, number>>(() => storage.getRecent());
 
   const { toast } = useToast();
   const searchRef = useRef<HTMLInputElement>(null);
@@ -65,6 +72,14 @@ export default function Page() {
       setItems(stored);
     }
   }, []);
+
+  // If instant re-rank is turned OFF, freeze usage at that moment
+  useEffect(() => {
+    if (!prefs.instantRerankOnCopy) {
+      setUsageSnapshot(storage.getUsage());
+      setRecentSnapshot(storage.getRecent());
+    }
+  }, [prefs.instantRerankOnCopy]);
 
   // Fuzzy search
   const fuse = useMemo(
@@ -100,7 +115,10 @@ export default function Page() {
       const text = buildCopy(i, p);
       await navigator.clipboard.writeText(text);
       storage.markUsed(i.id);
-      setLearnTick((t) => t + 1);
+
+      // Only trigger immediate re-rank when user has opted in
+      if (p.instantRerankOnCopy) setLearnTick((t) => t + 1);
+
       setCopiedId(i.id);
       toast("Copied");
       setTimeout(() => setCopiedId((x) => (x === i.id ? null : x)), 900);
@@ -115,8 +133,9 @@ export default function Page() {
         ? items.map((i) => ({ ...i, score: 0 }))
         : fuse.search(query).map((r) => ({ ...(r.item as Item), score: r.score ?? 0 }));
 
-    const usage: Record<string, number> = storage.getUsage();
-    const recent: Record<string, number> = storage.getRecent();
+    // Choose live usage/recent or frozen snapshots
+    const usage: Record<string, number> = prefs.instantRerankOnCopy ? storage.getUsage() : usageSnapshot;
+    const recent: Record<string, number> = prefs.instantRerankOnCopy ? storage.getRecent() : recentSnapshot;
 
     const halfLife = prefs.rankingHalfLifeDays ?? 30; // 1 month default
     const now = Date.now();
@@ -149,8 +168,8 @@ export default function Page() {
     } else {
       if ((prefs.rankingMode ?? "rankFirst") === "popularityFirst") {
         mix.sort((a, b) => {
-          const sa = 0.7 * decayedUse(a.id) + 0.3 * (a.popularity ?? 0);
-          const sb = 0.7 * decayedUse(b.id) + 0.3 * (b.popularity ?? 0);
+          const sa = 0.7 * (usage[a.id] ?? 0) + 0.3 * (a.popularity ?? 0);
+          const sb = 0.7 * (usage[b.id] ?? 0) + 0.3 * (b.popularity ?? 0);
           if (sa !== sb) return sb - sa;
           return a.name.localeCompare(b.name);
         });
@@ -167,7 +186,18 @@ export default function Page() {
       }
     }
     return mix;
-  }, [items, fuse, query, category, learnTick, prefs.rankingMode, prefs.rankingHalfLifeDays]);
+  }, [
+    items,
+    fuse,
+    query,
+    category,
+    learnTick,
+    prefs.rankingMode,
+    prefs.rankingHalfLifeDays,
+    prefs.instantRerankOnCopy,
+    usageSnapshot,
+    recentSnapshot,
+  ]);
 
   // Keyboard: Ctrl/Cmd+K focuses search; Enter copies top match (with visuals)
   useEffect(() => {
@@ -193,13 +223,19 @@ export default function Page() {
   // Rerank mode pulse (soften the reordering perception)
   const handleRerankModeChange = useCallback(
     (mode: Prefs["rankingMode"]) => {
-      // Visual pulse on the list + toast
       toast(mode === "popularityFirst" ? "Popularity-first ranking enabled" : "Explicit order enabled");
       setRerankPulse((x) => x + 1);
-      // Remove pulse class after a moment handled in render via key
     },
     [toast]
   );
+
+  // Apply usage to frozen snapshot (manual recompute without turning on instant)
+  const handleApplyUsageNow = useCallback(() => {
+    setUsageSnapshot(storage.getUsage());
+    setRecentSnapshot(storage.getRecent());
+    setRerankPulse((x) => x + 1);
+    toast("Ranking updated");
+  }, [toast]);
 
   /* ---------- Actions ---------- */
 
@@ -256,7 +292,7 @@ export default function Page() {
           <input
             ref={searchRef}
             aria-label="Search formulas and constants"
-            placeholder="Search by name, symbol, tags, or text…"
+            placeholder="Search by name, symbol, tags, or text… (Enter to copy top match)"
             value={query}
             onChange={(e) => setQuery(e.currentTarget.value)}
             className="w-full bg-transparent text-sm placeholder:[color:var(--muted)]
@@ -288,16 +324,12 @@ export default function Page() {
       </section>
 
       {/* Results (pulse key to trigger a light fade-in) */}
-      <section
-        key={rerankPulse}
-        className="mt-8 space-y-8 transition-opacity duration-200 opacity-100 animate-[none]"
-        style={{ animation: "none" }}
-      >
+      <section key={rerankPulse} className="mt-8 space-y-8">
         {groupByCategory(ranked, {
           rankingMode: prefs.rankingMode ?? "rankFirst",
           decayedUse: (id: string) => {
-            const usage = storage.getUsage();
-            const recent = storage.getRecent();
+            const usage = prefs.instantRerankOnCopy ? storage.getUsage() : usageSnapshot;
+            const recent = prefs.instantRerankOnCopy ? storage.getRecent() : recentSnapshot;
             const halfLife = prefs.rankingHalfLifeDays ?? 30;
             const last = recent[id];
             if (!last) return 0;
@@ -405,6 +437,7 @@ export default function Page() {
                             const text = i.value ? `${i.value}${i.units ? ` ${i.units}` : ""}` : "";
                             await navigator.clipboard.writeText(text);
                             storage.markUsed(i.id);
+                            if (prefs.instantRerankOnCopy) setLearnTick((t) => t + 1);
                             setCopiedId(i.id);
                             toast("Copied value");
                             setTimeout(() => setCopiedId((x) => (x === i.id ? null : x)), 900);
@@ -422,8 +455,10 @@ export default function Page() {
         ))}
       </section>
 
+      {/* Guided Add Modal (uses shared Modal to prevent overscroll + click-out close) */}
       {showAdd && (
         <AddDialog
+          open={showAdd}
           categories={categories.filter((c) => c.value !== null).map((c) => c.label)}
           onClose={() => setShowAdd(false)}
           onSubmit={onAdd}
@@ -437,6 +472,7 @@ export default function Page() {
         onChange={(p) => setLocalPrefs(p)}
         onDataChange={() => setItems(storage.getAll())}
         onRerankModeChange={handleRerankModeChange}
+        onApplyUsageNow={handleApplyUsageNow}
       />
     </main>
   );
@@ -494,14 +530,16 @@ function groupByCategory(
   });
 }
 
-/* ----------------- Guided AddDialog ----------------- */
+/* ----------------- Guided AddDialog (Modal-based) ----------------- */
 
 function AddDialog({
+  open,
   categories,
   onClose,
   onSubmit,
   buildPreview,
 }: {
+  open: boolean;
   categories: string[];
   onClose: () => void;
   onSubmit: (i: NewItemInput) => void;
@@ -571,210 +609,198 @@ function AddDialog({
     onSubmit(form);
   }
 
-  function onKey(e: React.KeyboardEvent) {
-    if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
-      e.preventDefault();
-      submit();
-    }
-  }
-
   const isEq = form.kind === "equation";
   const isConst = form.kind === "constant";
 
   return (
-    <div className="fixed inset-0 z-50 grid place-items-center bg-black/40 p-4" onKeyDown={onKey}>
+    <Modal open={open} onClose={onClose}>
+      {/* Sticky header with Cancel / Close pinned at top; click-out close handled by Modal */}
       <div
-        className="w-full max-w-2xl rounded-lg border shadow-lg"
-        style={{
-          background: "var(--card)",
-          borderColor: "var(--border)",
-          maxHeight: "min(85vh, 680px)",
-          overflowY: "auto",
-          overscrollBehavior: "contain",
-        }}
+        className="sticky top-0 z-10 flex items-center justify-between border-b px-4 py-3 sm:px-5"
+        style={{ background: "var(--card)", borderColor: "var(--border)" }}
       >
-        <div className="p-4 sm:p-5">
-          <div className="flex items-center justify-between">
-            <h3 className="text-lg font-semibold">Add item</h3>
-            <p className="text-xs" style={{ color: "var(--muted)" }}>
-              Tip: Ctrl/Cmd + Enter to save
+        <button className="btn" onClick={onClose}>
+          Cancel
+        </button>
+        <div className="text-sm font-medium">Add item</div>
+        <button className="btn" onClick={onClose} aria-label="Close">
+          <X className="h-4 w-4" />
+        </button>
+      </div>
+
+      <div className="p-4 sm:p-5">
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+          {/* Kind */}
+          <label className="text-sm">
+            <span className="mb-1 block" style={{ color: "var(--muted)" }}>
+              Kind
+            </span>
+            <select
+              className="input w-full"
+              value={form.kind}
+              onChange={(e) => setForm({ ...form, kind: e.currentTarget.value as "equation" | "constant" })}
+            >
+              <option value="equation">Equation</option>
+              <option value="constant">Constant</option>
+            </select>
+            <p className="mt-1 text-xs" style={{ color: "var(--muted)" }}>
+              Equations prefer LaTeX; constants prefer numeric value + units.
             </p>
-          </div>
+          </label>
 
-          <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2">
-            {/* Kind */}
-            <label className="text-sm">
-              <span className="mb-1 block" style={{ color: "var(--muted)" }}>
-                Kind
-              </span>
-              <select
-                className="input w-full"
-                value={form.kind}
-                onChange={(e) => setForm({ ...form, kind: e.currentTarget.value as "equation" | "constant" })}
-              >
-                <option value="equation">Equation</option>
-                <option value="constant">Constant</option>
-              </select>
-              <p className="mt-1 text-xs" style={{ color: "var(--muted)" }}>
-                Equations prefer LaTeX; constants prefer numeric value + units.
-              </p>
-            </label>
+          {/* Category */}
+          <label className="text-sm">
+            <span className="mb-1 block" style={{ color: "var(--muted)" }}>
+              Category
+            </span>
+            <input
+              list="category-options"
+              className="input w-full"
+              value={form.category}
+              onChange={(e) => setForm({ ...form, category: e.currentTarget.value })}
+              ref={nameRef}
+            />
+            <datalist id="category-options">
+              {categories.map((c) => (
+                <option key={c} value={c} />
+              ))}
+            </datalist>
+            {errors.category && <p className="mt-1 text-xs text-red-500">{errors.category}</p>}
+          </label>
 
-            {/* Category */}
-            <label className="text-sm">
-              <span className="mb-1 block" style={{ color: "var(--muted)" }}>
-                Category
-              </span>
-              <input
-                list="category-options"
-                className="input w-full"
-                value={form.category}
-                onChange={(e) => setForm({ ...form, category: e.currentTarget.value })}
-              />
-              <datalist id="category-options">
-                {categories.map((c) => (
-                  <option key={c} value={c} />
-                ))}
-              </datalist>
-              {errors.category && <p className="mt-1 text-xs text-red-500">{errors.category}</p>}
-            </label>
+          {/* Name */}
+          <label className="text-sm sm:col-span-2">
+            <span className="mb-1 block" style={{ color: "var(--muted)" }}>
+              Name <span className="text-red-500">*</span>
+            </span>
+            <input
+              className="input w-full"
+              placeholder={isEq ? "Uniform acceleration (1)" : "Boltzmann constant"}
+              value={form.name}
+              onChange={(e) => setForm({ ...form, name: e.currentTarget.value })}
+            />
+            {errors.name && <p className="mt-1 text-xs text-red-500">{errors.name}</p>}
+          </label>
 
-            {/* Name */}
-            <label className="text-sm sm:col-span-2">
-              <span className="mb-1 block" style={{ color: "var(--muted)" }}>
-                Name <span className="text-red-500">*</span>
-              </span>
-              <input
-                ref={nameRef}
-                className="input w-full"
-                placeholder={isEq ? "Uniform acceleration (1)" : "Boltzmann constant"}
-                value={form.name}
-                onChange={(e) => setForm({ ...form, name: e.currentTarget.value })}
-              />
-              {errors.name && <p className="mt-1 text-xs text-red-500">{errors.name}</p>}
-            </label>
+          {/* Symbol */}
+          <label className="text-sm">
+            <span className="mb-1 block" style={{ color: "var(--muted)" }}>
+              Symbol (optional)
+            </span>
+            <input
+              className="input w-full font-mono"
+              placeholder={isEq ? "v (for velocity)" : "k_B"}
+              value={form.symbol}
+              onChange={(e) => setForm({ ...form, symbol: e.currentTarget.value })}
+            />
+          </label>
 
-            {/* Symbol */}
-            <label className="text-sm">
-              <span className="mb-1 block" style={{ color: "var(--muted)" }}>
-                Symbol (optional)
-              </span>
-              <input
-                className="input w-full font-mono"
-                placeholder={isEq ? "v (for velocity)" : "k_B"}
-                value={form.symbol}
-                onChange={(e) => setForm({ ...form, symbol: e.currentTarget.value })}
-              />
-            </label>
-
-            {/* Value / Units — only for constants */}
-            {isConst && (
-              <>
-                <label className="text-sm">
-                  <span className="mb-1 block" style={{ color: "var(--muted)" }}>
-                    Value
-                  </span>
-                  <input
-                    className="input w-full font-mono"
-                    placeholder="1.381e-23"
-                    value={form.value}
-                    onChange={(e) => setForm({ ...form, value: e.currentTarget.value })}
-                  />
-                  {errors.value && <p className="mt-1 text-xs text-red-500">{errors.value}</p>}
-                </label>
-
-                <label className="text-sm">
-                  <span className="mb-1 block" style={{ color: "var(--muted)" }}>
-                    Units
-                  </span>
-                  <input
-                    className="input w-full font-mono"
-                    placeholder="J K^-1"
-                    value={form.units}
-                    onChange={(e) => setForm({ ...form, units: e.currentTarget.value })}
-                  />
-                </label>
-              </>
-            )}
-
-            {/* LaTeX — only for equations */}
-            {isEq && (
-              <label className="text-sm sm:col-span-2">
+          {/* Value / Units — only for constants */}
+          {isConst && (
+            <>
+              <label className="text-sm">
                 <span className="mb-1 block" style={{ color: "var(--muted)" }}>
-                  LaTeX
+                  Value
                 </span>
                 <input
                   className="input w-full font-mono"
-                  placeholder="v = v_0 + a t"
-                  value={form.latex}
-                  onChange={(e) => setForm({ ...form, latex: e.currentTarget.value })}
+                  placeholder="1.381e-23"
+                  value={form.value}
+                  onChange={(e) => setForm({ ...form, value: e.currentTarget.value })}
                 />
-                <p className="mt-1 text-xs" style={{ color: "var(--muted)" }}>
-                  Fractions: <code>{"\\frac{a}{b}"}</code> · Roots: <code>{"\\sqrt{x}"}</code> · Subscripts:{" "}
-                  <code>{"v_0"}</code> · Superscripts: <code>{"x^2"}</code>
-                </p>
+                {errors.value && <p className="mt-1 text-xs text-red-500">{errors.value}</p>}
               </label>
-            )}
 
-            {/* Description */}
+              <label className="text-sm">
+                <span className="mb-1 block" style={{ color: "var(--muted)" }}>
+                  Units
+                </span>
+                <input
+                  className="input w-full font-mono"
+                  placeholder="J K^-1"
+                  value={form.units}
+                  onChange={(e) => setForm({ ...form, units: e.currentTarget.value })}
+                />
+              </label>
+            </>
+          )}
+
+          {/* LaTeX — only for equations */}
+          {isEq && (
             <label className="text-sm sm:col-span-2">
               <span className="mb-1 block" style={{ color: "var(--muted)" }}>
-                Description / Notes
-              </span>
-              <textarea
-                className="input w-full"
-                rows={3}
-                placeholder="What is this used for? Any constraints or approximations?"
-                value={form.text}
-                onChange={(e) => setForm({ ...form, text: e.currentTarget.value })}
-              />
-            </label>
-
-            {/* Tags */}
-            <label className="text-sm sm:col-span-2">
-              <span className="mb-1 block" style={{ color: "var(--muted)" }}>
-                Tags (comma separated)
+                LaTeX
               </span>
               <input
-                className="input w-full"
-                placeholder="kinematics, acceleration, projectile"
-                value={form.tags?.join(", ") ?? ""}
-                onChange={(e) =>
-                  setForm({
-                    ...form,
-                    tags: e.currentTarget.value
-                      .split(",")
-                      .map((s: string) => s.trim())
-                      .filter(Boolean),
-                  })
-                }
+                className="input w-full font-mono"
+                placeholder="v = v_0 + a t"
+                value={form.latex}
+                onChange={(e) => setForm({ ...form, latex: e.currentTarget.value })}
               />
               <p className="mt-1 text-xs" style={{ color: "var(--muted)" }}>
-                2–5 tags improves search & re-ranking.
+                Fractions: <code>{"\\frac{a}{b}"}</code> · Roots: <code>{"\\sqrt{x}"}</code> · Subscripts:{" "}
+                <code>{"v_0"}</code> · Superscripts: <code>{"x^2"}</code>
               </p>
             </label>
-          </div>
+          )}
 
-          {/* Live preview */}
-          <div
-            className="mt-4 rounded-md border p-3"
-            style={{ borderColor: "var(--border)", background: "var(--elevated)" }}
-          >
-            <div className="text-xs uppercase tracking-wide" style={{ color: "var(--muted)" }}>
-              Preview (default copy format)
-            </div>
-            <pre className="mt-1 text-sm whitespace-pre-wrap">{sampleCopySafe(preview)}</pre>
-          </div>
+          {/* Description */}
+          <label className="text-sm sm:col-span-2">
+            <span className="mb-1 block" style={{ color: "var(--muted)" }}>
+              Description / Notes
+            </span>
+            <textarea
+              className="input w-full"
+              rows={3}
+              placeholder="What is this used for? Any constraints or approximations?"
+              value={form.text}
+              onChange={(e) => setForm({ ...form, text: e.currentTarget.value })}
+            />
+          </label>
 
-          {/* Actions */}
-          <div className="mt-4 flex items-center justify-end gap-2">
-            <Button onClick={onClose}>Cancel</Button>
-            <Button onClick={submit} disabled={!!errors.name || !!errors.category} title="Save item">
-              Save
-            </Button>
+          {/* Tags */}
+          <label className="text-sm sm:col-span-2">
+            <span className="mb-1 block" style={{ color: "var(--muted)" }}>
+              Tags (comma separated)
+            </span>
+            <input
+              className="input w-full"
+              placeholder="kinematics, acceleration, projectile"
+              value={form.tags?.join(", ") ?? ""}
+              onChange={(e) =>
+                setForm({
+                  ...form,
+                  tags: e.currentTarget.value
+                    .split(",")
+                    .map((s: string) => s.trim())
+                    .filter(Boolean),
+                })
+              }
+            />
+            <p className="mt-1 text-xs" style={{ color: "var(--muted)" }}>
+              2–5 tags improves search & re-ranking.
+            </p>
+          </label>
+        </div>
+
+        {/* Live preview */}
+        <div
+          className="mt-4 rounded-md border p-3"
+          style={{ borderColor: "var(--border)", background: "var(--elevated)" }}
+        >
+          <div className="text-xs uppercase tracking-wide" style={{ color: "var(--muted)" }}>
+            Preview (default copy format)
           </div>
+          <pre className="mt-1 text-sm whitespace-pre-wrap">{sampleCopySafe(preview)}</pre>
+        </div>
+
+        {/* Footer actions pinned bottom (save) */}
+        <div className="mt-4 flex items-center justify-end gap-2">
+          <Button onClick={submit} disabled={!!errors.name || !!errors.category} title="Save item">
+            Save
+          </Button>
         </div>
       </div>
-    </div>
+    </Modal>
   );
 }
