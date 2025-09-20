@@ -196,25 +196,32 @@ body {
   background: var(--card);
 }
 
-/* Segmented control for theme */
+/* Segmented control selected state */
 .segmented {
   display: inline-flex;
+  gap: 0.25rem;
+  padding: 0.25rem;
   border: 1px solid var(--border);
   border-radius: 0.5rem;
-  background: var(--card);
-  overflow: hidden;
+  background: var(--elevated);
 }
-.segmented .btn {
-  border: 0;
-  background: transparent;
-  color: var(--fg);
-}
-.segmented .btn + .btn {
-  border-left: 1px solid var(--border);
-}
-.segmented .btn[aria-pressed="true"] {
-  background: var(--chip-selected);
-  color: var(--chip-selected-fg);
+.segmented .btn[data-selected="true"] {
+  background: var(--ring-muted, rgba(0, 0, 0, 0.06));
   outline: 2px solid var(--ring);
-  outline-offset: -2px; /* keep outline inside */
+  outline-offset: 0;
+}
+
+/* Optional: rerank fade helper if you switch to a class instead of keying */
+.rerank-fade {
+  animation: rerankFade 180ms ease-out;
+}
+@keyframes rerankFade {
+  from {
+    opacity: 0.6;
+    transform: translateY(2px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
 }

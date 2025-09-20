@@ -2,17 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Fuse from "fuse.js";
-import {
-  Search,
-  Clipboard,
-  Check,
-  MoreVertical,
-  Plus,
-  Import,
-  Download,
-  RefreshCw,
-  Settings as SettingsIcon,
-} from "lucide-react";
+import { Search, Clipboard, Check, MoreVertical, Plus, Settings as SettingsIcon } from "lucide-react";
 import Button from "@/components/ui/Button";
 import Input from "@/components/ui/Input";
 import Card from "@/components/ui/Card";
@@ -45,7 +35,6 @@ const categoryOrder: Record<string, number> = {
 };
 
 type HasRank = { rank?: number };
-
 type Ranked = Item & { score: number };
 
 const msPerDay = 86_400_000;
@@ -61,10 +50,9 @@ export default function Page() {
   const [prefs, setLocalPrefs] = useState<Prefs>(getPrefs());
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [learnTick, setLearnTick] = useState(0);
+  const [rerankPulse, setRerankPulse] = useState(0); // increments on mode changes to pulse UI
 
   const { toast } = useToast();
-
-  const fileInputRef = useRef<HTMLInputElement>(null);
   const searchRef = useRef<HTMLInputElement>(null);
 
   // Init data
@@ -78,6 +66,7 @@ export default function Page() {
     }
   }, []);
 
+  // Fuzzy search
   const fuse = useMemo(
     () =>
       new Fuse(items, {
@@ -94,21 +83,18 @@ export default function Page() {
     [items]
   );
 
+  // Categories
   const categories = useMemo((): { label: string; value: string | null }[] => {
     const set = new Set(items.map((i) => i.category));
     let list = Array.from(set);
-    // ranked sections
     list.sort((a, b) => (categoryOrder[a] ?? 100) - (categoryOrder[b] ?? 100));
-    // Put Constants right after “All”
     if (list.includes("Constants")) {
       list = ["Constants", ...list.filter((c) => c !== "Constants")];
     }
     return [{ label: "All", value: null }, ...list.map((c) => ({ label: c, value: c }))];
   }, [items]);
 
-  const usage = storage.getUsage();
-  const recent = storage.getRecent();
-
+  // Copy (click or keyboard) – always shows the same visuals
   const handleCopy = useCallback(
     async (i: Item, p: Prefs) => {
       const text = buildCopy(i, p);
@@ -122,6 +108,7 @@ export default function Page() {
     [toast]
   );
 
+  // Ranked list (query-aware + learning + popularity)
   const ranked = useMemo(() => {
     const base: Ranked[] =
       query.trim().length === 0
@@ -131,14 +118,14 @@ export default function Page() {
     const usage: Record<string, number> = storage.getUsage();
     const recent: Record<string, number> = storage.getRecent();
 
-    const halfLife = prefs.rankingHalfLifeDays ?? 14;
+    const halfLife = prefs.rankingHalfLifeDays ?? 30; // 1 month default
     const now = Date.now();
 
     function decayedUse(id: string) {
       const count = usage[id] ?? 0;
       const last = recent[id];
       if (!count || !last) return 0;
-      if (!halfLife || halfLife <= 0) return count; // 0 or negative => no decay
+      if (!halfLife || halfLife <= 0) return count; // 0 => no decay
       const ageDays = (now - last) / msPerDay;
       const decay = Math.pow(0.5, ageDays / halfLife);
       return count * decay;
@@ -151,7 +138,6 @@ export default function Page() {
       const basePop = i.popularity ?? 0;
       const textRelevance = i.score > 0 ? 1 - Math.min(i.score, 1) : 0.5;
 
-      // learned signal stronger & decayed
       const total =
         0.45 * textRelevance + 0.35 * Math.tanh(useD / 2) + 0.1 * recencyBoost + 0.1 * Math.tanh(basePop / 5);
 
@@ -162,7 +148,6 @@ export default function Page() {
       mix.sort((a, b) => b.score - a.score);
     } else {
       if ((prefs.rankingMode ?? "rankFirst") === "popularityFirst") {
-        // Popularity-first inside the current filter
         mix.sort((a, b) => {
           const sa = 0.7 * decayedUse(a.id) + 0.3 * (a.popularity ?? 0);
           const sb = 0.7 * decayedUse(b.id) + 0.3 * (b.popularity ?? 0);
@@ -170,7 +155,6 @@ export default function Page() {
           return a.name.localeCompare(b.name);
         });
       } else {
-        // Explicit rank -> popularity -> name
         mix.sort((a, b) => {
           const ra = (a as HasRank).rank ?? Number.POSITIVE_INFINITY;
           const rb = (b as HasRank).rank ?? Number.POSITIVE_INFINITY;
@@ -185,7 +169,7 @@ export default function Page() {
     return mix;
   }, [items, fuse, query, category, learnTick, prefs.rankingMode, prefs.rankingHalfLifeDays]);
 
-  // Keyboard shortcuts: Ctrl/Cmd+K focuses search; Ctrl/Cmd+Enter copies top result
+  // Keyboard: Ctrl/Cmd+K focuses search; Enter copies top match (with visuals)
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
       const onSearch = document.activeElement === searchRef.current;
@@ -196,7 +180,7 @@ export default function Page() {
         return;
       }
 
-      if (onSearch && (e.ctrlKey || e.metaKey) && e.key === "Enter" && !e.isComposing) {
+      if (onSearch && e.key === "Enter" && !e.isComposing) {
         e.preventDefault();
         const first = ranked[0];
         if (first) handleCopy(first, prefs);
@@ -205,6 +189,17 @@ export default function Page() {
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [prefs, ranked, handleCopy]);
+
+  // Rerank mode pulse (soften the reordering perception)
+  const handleRerankModeChange = useCallback(
+    (mode: Prefs["rankingMode"]) => {
+      // Visual pulse on the list + toast
+      toast(mode === "popularityFirst" ? "Popularity-first ranking enabled" : "Explicit order enabled");
+      setRerankPulse((x) => x + 1);
+      // Remove pulse class after a moment handled in render via key
+    },
+    [toast]
+  );
 
   /* ---------- Actions ---------- */
 
@@ -227,38 +222,6 @@ export default function Page() {
     setShowAdd(false);
   }
 
-  const onImport = (file: File) => {
-    const reader = new FileReader();
-    reader.onload = () => {
-      try {
-        const raw = String(reader.result);
-        const json = JSON.parse(raw);
-        if (Array.isArray(json)) {
-          // legacy: array of items
-          storage.bulkUpsert(json);
-        } else if (json && Array.isArray(json.items)) {
-          storage.bulkUpsert(json.items);
-          if (json.prefs) setPrefs(json.prefs); // restore settings if present
-        } else {
-          alert("Invalid JSON format.");
-          return;
-        }
-        setItems(storage.getAll());
-      } catch {
-        alert("Invalid JSON");
-      }
-    };
-    reader.readAsText(file);
-  };
-
-  function onReset() {
-    if (confirm("Reset to built-in seed? This clears your local additions.")) {
-      storage.clearAll();
-      storage.bulkUpsert(seedItems);
-      setItems(storage.getAll());
-    }
-  }
-
   /* ---------- Render ---------- */
 
   return (
@@ -273,49 +236,9 @@ export default function Page() {
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
-          <input
-            ref={fileInputRef}
-            type="file"
-            accept="application/json"
-            className="hidden"
-            onChange={(e) => {
-              const f = e.target.files?.[0];
-              if (f) onImport(f);
-            }}
-          />
-          <Button onClick={() => fileInputRef.current?.click()}>
-            <Import className="h-4 w-4" /> Import
-          </Button>
-
-          <Button
-            onClick={() => {
-              const payload = {
-                version: 1,
-                exportedAt: new Date().toISOString(),
-                items,
-                prefs: getPrefs(), // <-- include settings
-              };
-              const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
-              const url = URL.createObjectURL(blob);
-              const a = document.createElement("a");
-              a.href = url;
-              a.download = "physics-quick-sheet.json";
-              a.click();
-              URL.revokeObjectURL(url);
-            }}
-          >
-            <Download className="h-4 w-4" /> Export
-          </Button>
-
           <Button onClick={() => setShowAdd(true)}>
             <Plus className="h-4 w-4" /> Add
           </Button>
-
-          <Button onClick={onReset}>
-            <RefreshCw className="h-4 w-4" /> Reset
-          </Button>
-
-          {/* Keep header minimal: a single Settings button */}
           <Button onClick={() => setShowSettings(true)}>
             <SettingsIcon className="h-4 w-4" /> Settings
           </Button>
@@ -333,7 +256,7 @@ export default function Page() {
           <input
             ref={searchRef}
             aria-label="Search formulas and constants"
-            placeholder="Search by name, symbol, tags, or text… (Ctrl/Cmd+K)"
+            placeholder="Search by name, symbol, tags, or text…"
             value={query}
             onChange={(e) => setQuery(e.currentTarget.value)}
             className="w-full bg-transparent text-sm placeholder:[color:var(--muted)]
@@ -364,17 +287,20 @@ export default function Page() {
         </div>
       </section>
 
-      {/* Results */}
-      <section className="mt-8 space-y-8">
+      {/* Results (pulse key to trigger a light fade-in) */}
+      <section
+        key={rerankPulse}
+        className="mt-8 space-y-8 transition-opacity duration-200 opacity-100 animate-[none]"
+        style={{ animation: "none" }}
+      >
         {groupByCategory(ranked, {
           rankingMode: prefs.rankingMode ?? "rankFirst",
           decayedUse: (id: string) => {
             const usage = storage.getUsage();
             const recent = storage.getRecent();
-            const halfLife = prefs.rankingHalfLifeDays ?? 30; // default 1 month
+            const halfLife = prefs.rankingHalfLifeDays ?? 30;
             const last = recent[id];
             if (!last) return 0;
-            // 0 or negative half-life => NO decay
             if (!halfLife || halfLife <= 0) return usage[id] ?? 0;
             const ageDays = (Date.now() - last) / msPerDay;
             const decay = Math.pow(0.5, ageDays / halfLife);
@@ -496,8 +422,22 @@ export default function Page() {
         ))}
       </section>
 
-      {showAdd && <AddDialog onClose={() => setShowAdd(false)} onSubmit={onAdd} />}
-      <SettingsModal open={showSettings} onClose={() => setShowSettings(false)} onChange={(p) => setLocalPrefs(p)} />
+      {showAdd && (
+        <AddDialog
+          categories={categories.filter((c) => c.value !== null).map((c) => c.label)}
+          onClose={() => setShowAdd(false)}
+          onSubmit={onAdd}
+          buildPreview={(item) => buildCopy(item, getPrefs())}
+        />
+      )}
+
+      <SettingsModal
+        open={showSettings}
+        onClose={() => setShowSettings(false)}
+        onChange={(p) => setLocalPrefs(p)}
+        onDataChange={() => setItems(storage.getAll())}
+        onRerankModeChange={handleRerankModeChange}
+      />
     </main>
   );
 }
@@ -554,11 +494,23 @@ function groupByCategory(
   });
 }
 
-function AddDialog({ onClose, onSubmit }: { onClose: () => void; onSubmit: (i: NewItemInput) => void }) {
+/* ----------------- Guided AddDialog ----------------- */
+
+function AddDialog({
+  categories,
+  onClose,
+  onSubmit,
+  buildPreview,
+}: {
+  categories: string[];
+  onClose: () => void;
+  onSubmit: (i: NewItemInput) => void;
+  buildPreview: (i: Item) => string;
+}) {
   const [form, setForm] = useState<NewItemInput>({
     kind: "equation",
     name: "",
-    category: "Kinematics",
+    category: categories[0] ?? "Kinematics",
     latex: "",
     text: "",
     symbol: "",
@@ -567,115 +519,260 @@ function AddDialog({ onClose, onSubmit }: { onClose: () => void; onSubmit: (i: N
     tags: [],
   });
 
+  const [errors, setErrors] = useState<{ name?: string; category?: string; value?: string }>({});
+  const nameRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    nameRef.current?.focus();
+  }, []);
+
+  useEffect(() => {
+    const next: typeof errors = {};
+    if (!form.name.trim()) next.name = "Name is required.";
+    if (!form.category.trim()) next.category = "Category is required.";
+    if (form.kind === "constant" && form.value && isNaN(Number(form.value))) {
+      next.value = "Value should be numeric (e.g., 6.67e-11).";
+    }
+    setErrors(next);
+  }, [form]);
+
+  const preview: Item = useMemo(
+    () => ({
+      id: "preview",
+      kind: form.kind,
+      name: form.name || "New item",
+      symbol: form.symbol || undefined,
+      value: form.value || undefined,
+      units: form.units || undefined,
+      latex: form.latex || "",
+      text: form.text || "",
+      tags: form.tags ?? [],
+      category: form.category || "Uncategorized",
+    }),
+    [form]
+  );
+
+  function sampleCopySafe(item: Item) {
+    try {
+      return buildPreview(item);
+    } catch {
+      if (item.kind === "constant") {
+        const unit = item.units ? ` ${item.units}` : "";
+        const val = item.value ? `${item.value}${unit}` : "";
+        return `${item.name}${item.symbol ? ` (${item.symbol})` : ""}${val ? ` = ${val}` : ""}`;
+      }
+      return `${item.name}${item.latex ? `: ${item.latex}` : item.text ? ` — ${item.text}` : ""}`;
+    }
+  }
+
+  function submit() {
+    if (Object.keys(errors).length > 0) return;
+    if (!form.name.trim() || !form.category.trim()) return;
+    onSubmit(form);
+  }
+
+  function onKey(e: React.KeyboardEvent) {
+    if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
+      e.preventDefault();
+      submit();
+    }
+  }
+
+  const isEq = form.kind === "equation";
+  const isConst = form.kind === "constant";
+
   return (
-    <div className="fixed inset-0 z-50 grid place-items-center bg-black/40 p-4">
-      <div className="w-full max-w-2xl card">
-        <h3 className="text-lg font-semibold">Add item</h3>
+    <div className="fixed inset-0 z-50 grid place-items-center bg-black/40 p-4" onKeyDown={onKey}>
+      <div
+        className="w-full max-w-2xl rounded-lg border shadow-lg"
+        style={{
+          background: "var(--card)",
+          borderColor: "var(--border)",
+          maxHeight: "min(85vh, 680px)",
+          overflowY: "auto",
+          overscrollBehavior: "contain",
+        }}
+      >
+        <div className="p-4 sm:p-5">
+          <div className="flex items-center justify-between">
+            <h3 className="text-lg font-semibold">Add item</h3>
+            <p className="text-xs" style={{ color: "var(--muted)" }}>
+              Tip: Ctrl/Cmd + Enter to save
+            </p>
+          </div>
 
-        <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2">
-          <label className="text-sm">
-            <span className="mb-1 block" style={{ color: "var(--muted)" }}>
-              Kind
-            </span>
-            <select
-              className="input"
-              value={form.kind}
-              onChange={(e) => setForm({ ...form, kind: e.currentTarget.value as "equation" | "constant" })}
-            >
-              <option value="equation">Equation</option>
-              <option value="constant">Constant</option>
-            </select>
-          </label>
+          <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2">
+            {/* Kind */}
+            <label className="text-sm">
+              <span className="mb-1 block" style={{ color: "var(--muted)" }}>
+                Kind
+              </span>
+              <select
+                className="input w-full"
+                value={form.kind}
+                onChange={(e) => setForm({ ...form, kind: e.currentTarget.value as "equation" | "constant" })}
+              >
+                <option value="equation">Equation</option>
+                <option value="constant">Constant</option>
+              </select>
+              <p className="mt-1 text-xs" style={{ color: "var(--muted)" }}>
+                Equations prefer LaTeX; constants prefer numeric value + units.
+              </p>
+            </label>
 
-          <label className="text-sm">
-            <span className="mb-1 block" style={{ color: "var(--muted)" }}>
-              Category
-            </span>
-            <Input value={form.category} onChange={(e) => setForm({ ...form, category: e.currentTarget.value })} />
-          </label>
+            {/* Category */}
+            <label className="text-sm">
+              <span className="mb-1 block" style={{ color: "var(--muted)" }}>
+                Category
+              </span>
+              <input
+                list="category-options"
+                className="input w-full"
+                value={form.category}
+                onChange={(e) => setForm({ ...form, category: e.currentTarget.value })}
+              />
+              <datalist id="category-options">
+                {categories.map((c) => (
+                  <option key={c} value={c} />
+                ))}
+              </datalist>
+              {errors.category && <p className="mt-1 text-xs text-red-500">{errors.category}</p>}
+            </label>
 
-          <label className="text-sm sm:col-span-2">
-            <span className="mb-1 block" style={{ color: "var(--muted)" }}>
-              Name
-            </span>
-            <Input value={form.name} onChange={(e) => setForm({ ...form, name: e.currentTarget.value })} />
-          </label>
+            {/* Name */}
+            <label className="text-sm sm:col-span-2">
+              <span className="mb-1 block" style={{ color: "var(--muted)" }}>
+                Name <span className="text-red-500">*</span>
+              </span>
+              <input
+                ref={nameRef}
+                className="input w-full"
+                placeholder={isEq ? "Uniform acceleration (1)" : "Boltzmann constant"}
+                value={form.name}
+                onChange={(e) => setForm({ ...form, name: e.currentTarget.value })}
+              />
+              {errors.name && <p className="mt-1 text-xs text-red-500">{errors.name}</p>}
+            </label>
 
-          <label className="text-sm">
-            <span className="mb-1 block" style={{ color: "var(--muted)" }}>
-              Symbol (optional)
-            </span>
-            <Input value={form.symbol} onChange={(e) => setForm({ ...form, symbol: e.currentTarget.value })} />
-          </label>
+            {/* Symbol */}
+            <label className="text-sm">
+              <span className="mb-1 block" style={{ color: "var(--muted)" }}>
+                Symbol (optional)
+              </span>
+              <input
+                className="input w-full font-mono"
+                placeholder={isEq ? "v (for velocity)" : "k_B"}
+                value={form.symbol}
+                onChange={(e) => setForm({ ...form, symbol: e.currentTarget.value })}
+              />
+            </label>
 
-          <label className="text-sm">
-            <span className="mb-1 block" style={{ color: "var(--muted)" }}>
-              Value (constants)
-            </span>
-            <Input value={form.value} onChange={(e) => setForm({ ...form, value: e.currentTarget.value })} />
-          </label>
+            {/* Value / Units — only for constants */}
+            {isConst && (
+              <>
+                <label className="text-sm">
+                  <span className="mb-1 block" style={{ color: "var(--muted)" }}>
+                    Value
+                  </span>
+                  <input
+                    className="input w-full font-mono"
+                    placeholder="1.381e-23"
+                    value={form.value}
+                    onChange={(e) => setForm({ ...form, value: e.currentTarget.value })}
+                  />
+                  {errors.value && <p className="mt-1 text-xs text-red-500">{errors.value}</p>}
+                </label>
 
-          <label className="text-sm">
-            <span className="mb-1 block" style={{ color: "var(--muted)" }}>
-              Units (constants)
-            </span>
-            <Input value={form.units} onChange={(e) => setForm({ ...form, units: e.currentTarget.value })} />
-          </label>
+                <label className="text-sm">
+                  <span className="mb-1 block" style={{ color: "var(--muted)" }}>
+                    Units
+                  </span>
+                  <input
+                    className="input w-full font-mono"
+                    placeholder="J K^-1"
+                    value={form.units}
+                    onChange={(e) => setForm({ ...form, units: e.currentTarget.value })}
+                  />
+                </label>
+              </>
+            )}
 
-          <label className="text-sm sm:col-span-2">
-            <span className="mb-1 block" style={{ color: "var(--muted)" }}>
-              LaTeX (equations)
-            </span>
-            <Input
-              value={form.latex}
-              placeholder="e.g., v = v_0 + a t"
-              onChange={(e) => setForm({ ...form, latex: e.currentTarget.value })}
-              className="font-mono"
-            />
-          </label>
+            {/* LaTeX — only for equations */}
+            {isEq && (
+              <label className="text-sm sm:col-span-2">
+                <span className="mb-1 block" style={{ color: "var(--muted)" }}>
+                  LaTeX
+                </span>
+                <input
+                  className="input w-full font-mono"
+                  placeholder="v = v_0 + a t"
+                  value={form.latex}
+                  onChange={(e) => setForm({ ...form, latex: e.currentTarget.value })}
+                />
+                <p className="mt-1 text-xs" style={{ color: "var(--muted)" }}>
+                  Fractions: <code>{"\\frac{a}{b}"}</code> · Roots: <code>{"\\sqrt{x}"}</code> · Subscripts:{" "}
+                  <code>{"v_0"}</code> · Superscripts: <code>{"x^2"}</code>
+                </p>
+              </label>
+            )}
 
-          <label className="text-sm sm:col-span-2">
-            <span className="mb-1 block" style={{ color: "var(--muted)" }}>
-              Description / Notes
-            </span>
-            <textarea
-              className="input"
-              rows={3}
-              value={form.text}
-              onChange={(e) => setForm({ ...form, text: e.currentTarget.value })}
-            />
-          </label>
+            {/* Description */}
+            <label className="text-sm sm:col-span-2">
+              <span className="mb-1 block" style={{ color: "var(--muted)" }}>
+                Description / Notes
+              </span>
+              <textarea
+                className="input w-full"
+                rows={3}
+                placeholder="What is this used for? Any constraints or approximations?"
+                value={form.text}
+                onChange={(e) => setForm({ ...form, text: e.currentTarget.value })}
+              />
+            </label>
 
-          <label className="text-sm sm:col-span-2">
-            <span className="mb-1 block" style={{ color: "var(--muted)" }}>
-              Tags (comma separated)
-            </span>
-            <Input
-              value={form.tags?.join(", ") ?? ""}
-              onChange={(e) =>
-                setForm({
-                  ...form,
-                  tags: e.currentTarget.value
-                    .split(",")
-                    .map((s: string) => s.trim())
-                    .filter(Boolean),
-                })
-              }
-            />
-          </label>
-        </div>
+            {/* Tags */}
+            <label className="text-sm sm:col-span-2">
+              <span className="mb-1 block" style={{ color: "var(--muted)" }}>
+                Tags (comma separated)
+              </span>
+              <input
+                className="input w-full"
+                placeholder="kinematics, acceleration, projectile"
+                value={form.tags?.join(", ") ?? ""}
+                onChange={(e) =>
+                  setForm({
+                    ...form,
+                    tags: e.currentTarget.value
+                      .split(",")
+                      .map((s: string) => s.trim())
+                      .filter(Boolean),
+                  })
+                }
+              />
+              <p className="mt-1 text-xs" style={{ color: "var(--muted)" }}>
+                2–5 tags improves search & re-ranking.
+              </p>
+            </label>
+          </div>
 
-        <div className="mt-4 flex items-center justify-end gap-2">
-          <Button onClick={onClose}>Cancel</Button>
-          <Button
-            variant="primary"
-            onClick={() => {
-              if (!form.name.trim()) return alert("Name is required.");
-              onSubmit(form);
-            }}
+          {/* Live preview */}
+          <div
+            className="mt-4 rounded-md border p-3"
+            style={{ borderColor: "var(--border)", background: "var(--elevated)" }}
           >
-            Save
-          </Button>
+            <div className="text-xs uppercase tracking-wide" style={{ color: "var(--muted)" }}>
+              Preview (default copy format)
+            </div>
+            <pre className="mt-1 text-sm whitespace-pre-wrap">{sampleCopySafe(preview)}</pre>
+          </div>
+
+          {/* Actions */}
+          <div className="mt-4 flex items-center justify-end gap-2">
+            <Button onClick={onClose}>Cancel</Button>
+            <Button onClick={submit} disabled={!!errors.name || !!errors.category} title="Save item">
+              Save
+            </Button>
+          </div>
         </div>
       </div>
     </div>
