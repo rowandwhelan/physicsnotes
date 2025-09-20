@@ -36,14 +36,12 @@ export default function SettingsModal({
   onChange,
   onDataChange,
   onRerankModeChange,
-  onApplyUsageNow,
 }: {
   open: boolean;
   onClose: () => void;
   onChange?: (p: Prefs) => void;
   onDataChange?: () => void;
   onRerankModeChange?: (mode: Prefs["rankingMode"]) => void;
-  onApplyUsageNow?: () => void;
 }) {
   const { theme, setTheme } = useTheme();
   const [prefs, setLocal] = useState<Prefs>(getPrefs());
@@ -115,17 +113,6 @@ export default function SettingsModal({
     if (!confirm("Reset to built-in seed? This clears your local additions (but keeps settings).")) return;
     storage.clearAll();
     storage.bulkUpsert(seedItems);
-    onDataChange?.();
-  }
-
-  function hasResetLearning(x: unknown): x is { resetLearning: () => void } {
-    return !!x && typeof (x as any).resetLearning === "function";
-  }
-
-  function resetLearning() {
-    if (hasResetLearning(storage)) {
-      storage.resetLearning();
-    }
     onDataChange?.();
   }
 

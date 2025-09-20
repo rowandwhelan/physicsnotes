@@ -50,7 +50,6 @@ export default function Page() {
 
   // Copy UX
   const [copiedId, setCopiedId] = useState<string | null>(null);
-  const [learnTick, setLearnTick] = useState(0);
   const [rerankPulse, setRerankPulse] = useState(0);
 
   // Frozen usage snapshot (used when instant re-rank is OFF)
@@ -126,7 +125,7 @@ export default function Page() {
       storage.markUsed(i.id);
 
       // Only trigger immediate re-rank when user has opted in
-      if (p.instantRerankOnCopy) setLearnTick((t) => t + 1);
+      if (p.instantRerankOnCopy) setRerankPulse((x) => x + 1);
 
       setCopiedId(i.id);
       toast("Copied");
@@ -245,13 +244,6 @@ export default function Page() {
 
   // Rerank mode pulse (soften the reordering perception)
   const handleRerankModeChange = useCallback(() => {
-    setRerankPulse((x) => x + 1);
-  }, []);
-
-  // Apply usage to frozen snapshot (manual recompute without enabling instant)
-  const handleApplyUsageNow = useCallback(() => {
-    setUsageSnapshot(storage.getUsage());
-    setRecentSnapshot(storage.getRecent());
     setRerankPulse((x) => x + 1);
   }, []);
 
@@ -480,7 +472,7 @@ export default function Page() {
                             const text = i.value ? `${i.value}${i.units ? ` ${i.units}` : ""}` : "";
                             await navigator.clipboard.writeText(text);
                             storage.markUsed(i.id);
-                            if (prefs.instantRerankOnCopy) setLearnTick((t) => t + 1);
+                            if (prefs.instantRerankOnCopy) setRerankPulse((x) => x + 1);
                             setCopiedId(i.id);
                             toast("Copied value");
                             setTimeout(() => setCopiedId((x) => (x === i.id ? null : x)), 900);
@@ -515,7 +507,6 @@ export default function Page() {
         onChange={(p) => setLocalPrefs(p)}
         onDataChange={() => setItems(storage.getAll())}
         onRerankModeChange={handleRerankModeChange}
-        onApplyUsageNow={handleApplyUsageNow}
       />
     </main>
   );

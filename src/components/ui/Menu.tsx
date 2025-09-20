@@ -1,18 +1,37 @@
 "use client";
-import { useEffect, useRef, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 
+/**
+ * Usage:
+ * <Menu button={<Button>More</Button>}>
+ *   <button role="menuitem">Item A</button>
+ * </Menu>
+ */
 export default function Menu({
   button,
   children,
   align = "end",
 }: {
-  button: React.ReactNode;
+  button: React.ReactElement; // must be a valid element (e.g., your <Button/>)
   children: React.ReactNode;
   align?: "start" | "end";
 }) {
   const [open, setOpen] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
-  const triggerRef = useRef<HTMLButtonElement>(null);
+  const lastActive = useRef<HTMLElement | null>(null);
+
+  // Toggle open while preserving any onClick the caller attached
+  const trigger = React.isValidElement(button)
+    ? React.cloneElement(button as React.ReactElement<React.ButtonHTMLAttributes<HTMLButtonElement>>, {
+        onClick: (e: React.MouseEvent<HTMLButtonElement>) => {
+          (button.props as { onClick?: (ev: React.MouseEvent) => void }).onClick?.(e);
+          if (!open) lastActive.current = document.activeElement as HTMLElement | null;
+          setOpen((o) => !o);
+        },
+        "aria-haspopup": "menu",
+        "aria-expanded": open,
+      })
+    : button;
 
   // Close on outside click
   useEffect(() => {
@@ -25,14 +44,15 @@ export default function Menu({
     return () => document.removeEventListener("mousedown", onDoc);
   }, []);
 
-  // Esc to close and refocus trigger
+  // Esc to close + restore focus without injecting a ref into the trigger
   useEffect(() => {
     if (!open) return;
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
         e.preventDefault();
         setOpen(false);
-        triggerRef.current?.focus();
+        // Restore focus to whatever was focused before opening
+        lastActive.current?.focus?.();
       }
     };
     document.addEventListener("keydown", onKey);
@@ -41,19 +61,7 @@ export default function Menu({
 
   return (
     <div ref={rootRef} className="relative inline-block">
-      <button
-        ref={triggerRef}
-        type="button"
-        aria-haspopup="menu"
-        aria-expanded={open}
-        onClick={() => setOpen((o) => !o)}
-        // Let the caller style the visual; we just render their node inside
-        className="contents"
-      >
-        {/* The caller passes a fully-styled Button as `button` */}
-        {button}
-      </button>
-
+      {trigger}
       {open && (
         <div
           className="absolute z-20 mt-2 min-w-[200px] rounded-md border p-1"
