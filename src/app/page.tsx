@@ -16,7 +16,6 @@ import {
 import Button from "@/components/ui/Button";
 import Input from "@/components/ui/Input";
 import Card from "@/components/ui/Card";
-import Chip from "@/components/ui/Chip";
 import SettingsModal from "@/components/settings/SettingsModal";
 import { useToast } from "@/components/toast/ToastProvider";
 
@@ -28,6 +27,7 @@ import { getPrefs, setPrefs, Prefs } from "@/lib/prefs";
 import { buildCopy } from "@/lib/copy";
 import clsx from "clsx";
 import Menu from "@/components/ui/Menu";
+import HScroll from "@/components/ui/HScroll";
 
 /* ----------------- Setup ----------------- */
 
@@ -48,16 +48,19 @@ type HasRank = { rank?: number };
 
 type Ranked = Item & { score: number };
 
+const msPerDay = 86_400_000;
+
 /* ----------------- Page ----------------- */
 
 export default function Page() {
   const [items, setItems] = useState<Item[]>([]);
   const [query, setQuery] = useState("");
-  const [category, setCategory] = useState<string | "All">("All");
+  const [category, setCategory] = useState<string | null>(null); // null = All
   const [showAdd, setShowAdd] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [prefs, setLocalPrefs] = useState<Prefs>(getPrefs());
   const [copiedId, setCopiedId] = useState<string | null>(null);
+  const [learnTick, setLearnTick] = useState(0);
 
   const { toast } = useToast();
 
@@ -91,16 +94,16 @@ export default function Page() {
     [items]
   );
 
-  const categories = useMemo(() => {
+  const categories = useMemo((): { label: string; value: string | null }[] => {
     const set = new Set(items.map((i) => i.category));
     let list = Array.from(set);
-    // keep your rank ordering for the remainder
+    // ranked sections
     list.sort((a, b) => (categoryOrder[a] ?? 100) - (categoryOrder[b] ?? 100));
-    // move Constants to the front (after 'All')
+    // Put Constants right after “All”
     if (list.includes("Constants")) {
       list = ["Constants", ...list.filter((c) => c !== "Constants")];
     }
-    return ["All", ...list];
+    return [{ label: "All", value: null }, ...list.map((c) => ({ label: c, value: c }))];
   }, [items]);
 
   const usage = storage.getUsage();
@@ -111,6 +114,7 @@ export default function Page() {
       const text = buildCopy(i, p);
       await navigator.clipboard.writeText(text);
       storage.markUsed(i.id);
+      setLearnTick((t) => t + 1);
       setCopiedId(i.id);
       toast("Copied");
       setTimeout(() => setCopiedId((x) => (x === i.id ? null : x)), 900);
@@ -124,33 +128,62 @@ export default function Page() {
         ? items.map((i) => ({ ...i, score: 0 }))
         : fuse.search(query).map((r) => ({ ...(r.item as Item), score: r.score ?? 0 }));
 
-    const filtered = base.filter((i) => category === "All" || i.category === category);
+    const usage: Record<string, number> = storage.getUsage();
+    const recent: Record<string, number> = storage.getRecent();
+
+    const halfLife = prefs.rankingHalfLifeDays ?? 14;
+    const now = Date.now();
+
+    function decayedUse(id: string) {
+      const count = usage[id] ?? 0;
+      const last = recent[id];
+      if (!count || !last) return 0;
+      if (!halfLife || halfLife <= 0) return count; // 0 or negative => no decay
+      const ageDays = (now - last) / msPerDay;
+      const decay = Math.pow(0.5, ageDays / halfLife);
+      return count * decay;
+    }
+
+    const filtered = base.filter((i) => category === null || i.category === category);
     const mix = filtered.map((i) => {
-      const useCount = usage[i.id] ?? 0;
+      const useD = decayedUse(i.id);
       const recencyBoost = recent[i.id] ? 1 : 0;
       const basePop = i.popularity ?? 0;
       const textRelevance = i.score > 0 ? 1 - Math.min(i.score, 1) : 0.5;
+
+      // learned signal stronger & decayed
       const total =
-        0.55 * textRelevance + 0.25 * Math.tanh(useCount / 3) + 0.1 * recencyBoost + 0.1 * Math.tanh(basePop / 5);
+        0.45 * textRelevance + 0.35 * Math.tanh(useD / 2) + 0.1 * recencyBoost + 0.1 * Math.tanh(basePop / 5);
+
       return { ...i, score: total };
     });
 
     if (query.trim().length > 0) {
       mix.sort((a, b) => b.score - a.score);
     } else {
-      mix.sort((a, b) => {
-        const ra = (a as HasRank).rank ?? Number.POSITIVE_INFINITY;
-        const rb = (b as HasRank).rank ?? Number.POSITIVE_INFINITY;
-
-        if (ra !== rb) return ra - rb;
-        const pa = a.popularity ?? 0;
-        const pb = b.popularity ?? 0;
-        if (pa !== pb) return pb - pa;
-        return a.name.localeCompare(b.name);
-      });
+      if ((prefs.rankingMode ?? "rankFirst") === "popularityFirst") {
+        // Popularity-first inside the current filter
+        mix.sort((a, b) => {
+          const sa = 0.7 * decayedUse(a.id) + 0.3 * (a.popularity ?? 0);
+          const sb = 0.7 * decayedUse(b.id) + 0.3 * (b.popularity ?? 0);
+          if (sa !== sb) return sb - sa;
+          return a.name.localeCompare(b.name);
+        });
+      } else {
+        // Explicit rank -> popularity -> name
+        mix.sort((a, b) => {
+          const ra = (a as HasRank).rank ?? Number.POSITIVE_INFINITY;
+          const rb = (b as HasRank).rank ?? Number.POSITIVE_INFINITY;
+          if (ra !== rb) return ra - rb;
+          const pa = a.popularity ?? 0;
+          const pb = b.popularity ?? 0;
+          if (pa !== pb) return pb - pa;
+          return a.name.localeCompare(b.name);
+        });
+      }
     }
     return mix;
-  }, [items, fuse, query, category, usage, recent]);
+  }, [items, fuse, query, category, learnTick, prefs.rankingMode, prefs.rankingHalfLifeDays]);
 
   // Keyboard shortcuts: Ctrl/Cmd+K focuses search; Ctrl/Cmd+Enter copies top result
   useEffect(() => {
@@ -194,19 +227,29 @@ export default function Page() {
     setShowAdd(false);
   }
 
-  function onImport(file: File) {
+  const onImport = (file: File) => {
     const reader = new FileReader();
     reader.onload = () => {
       try {
-        const json = JSON.parse(String(reader.result)) as Item[];
-        storage.bulkUpsert(json);
+        const raw = String(reader.result);
+        const json = JSON.parse(raw);
+        if (Array.isArray(json)) {
+          // legacy: array of items
+          storage.bulkUpsert(json);
+        } else if (json && Array.isArray(json.items)) {
+          storage.bulkUpsert(json.items);
+          if (json.prefs) setPrefs(json.prefs); // restore settings if present
+        } else {
+          alert("Invalid JSON format.");
+          return;
+        }
         setItems(storage.getAll());
       } catch {
         alert("Invalid JSON");
       }
     };
     reader.readAsText(file);
-  }
+  };
 
   function onReset() {
     if (confirm("Reset to built-in seed? This clears your local additions.")) {
@@ -246,7 +289,13 @@ export default function Page() {
 
           <Button
             onClick={() => {
-              const blob = new Blob([JSON.stringify(items, null, 2)], { type: "application/json" });
+              const payload = {
+                version: 1,
+                exportedAt: new Date().toISOString(),
+                items,
+                prefs: getPrefs(), // <-- include settings
+              };
+              const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
               const url = URL.createObjectURL(blob);
               const a = document.createElement("a");
               a.href = url;
@@ -276,31 +325,38 @@ export default function Page() {
       {/* Command bar */}
       <section className="mt-6 flex flex-col gap-3">
         <label
-          className="flex items-center gap-2 rounded-md border px-3 py-2 shadow-sm
-             focus-within:outline-2 focus-within:outline-offset-2
-             [outline-color:var(--ring)]"
+          className="group/input flex items-center gap-2 rounded-md border px-3 py-2 shadow-sm
+             focus-within:outline-2 focus-within:outline-offset-2 [outline-color:var(--ring)]"
           style={{ background: "var(--card)", borderColor: "var(--border)" }}
         >
           <Search className="h-5 w-5" style={{ color: "var(--muted)" }} />
-          <Input
+          <input
             ref={searchRef}
             aria-label="Search formulas and constants"
             placeholder="Search by name, symbol, tags, or text… (Ctrl/Cmd+K)"
             value={query}
             onChange={(e) => setQuery(e.currentTarget.value)}
-            className="border-0 bg-transparent p-0"
+            className="w-full bg-transparent text-sm placeholder:[color:var(--muted)]
+               outline-none focus:outline-none focus-visible:outline-none
+               ring-0 focus:ring-0 border-0"
           />
         </label>
 
-        <div className="-mx-1 overflow-x-auto pb-1">
+        <HScroll className="-mx-1 overflow-x-auto pb-1">
           <div className="flex min-w-fit items-center gap-2 px-1">
-            {categories.map((c) => (
-              <Chip key={c} selected={c === category} onClick={() => setCategory(c)}>
-                {c}
-              </Chip>
+            {categories.map((opt) => (
+              <button
+                key={opt.label}
+                onClick={() => setCategory(opt.value)}
+                className="chip"
+                data-selected={opt.value === category ? "true" : "false"}
+                title={opt.label}
+              >
+                <span className="truncate max-w-[32ch]">{opt.label}</span>
+              </button>
             ))}
           </div>
-        </div>
+        </HScroll>
 
         <div className="text-xs text-[var(--muted)]">
           Tip: Press <span className="kbd">Ctrl</span>/<span className="kbd">Cmd</span> + <span className="kbd">K</span>{" "}
@@ -309,11 +365,25 @@ export default function Page() {
       </section>
 
       {/* Results */}
-      <section className="mt-8 space-y-10">
-        {groupByCategory(ranked).map(([cat, list]) => (
+      <section className="mt-8 space-y-8">
+        {groupByCategory(ranked, {
+          rankingMode: prefs.rankingMode ?? "rankFirst",
+          decayedUse: (id: string) => {
+            const usage = storage.getUsage();
+            const recent = storage.getRecent();
+            const halfLife = prefs.rankingHalfLifeDays ?? 30; // default 1 month
+            const last = recent[id];
+            if (!last) return 0;
+            // 0 or negative half-life => NO decay
+            if (!halfLife || halfLife <= 0) return usage[id] ?? 0;
+            const ageDays = (Date.now() - last) / msPerDay;
+            const decay = Math.pow(0.5, ageDays / halfLife);
+            return (usage[id] ?? 0) * decay;
+          },
+        }).map(([cat, list]) => (
           <div key={cat}>
             <h2 className="mb-4 text-xl font-semibold">{cat}</h2>
-            <div className="grid gap-4 sm:grid-cols-2">
+            <div className="grid gap-3 sm:gap-4 md:gap-5 sm:grid-cols-2 md:grid-cols-3">
               {list.map((i) => (
                 <Card key={i.id}>
                   <div className="flex flex-col">
@@ -434,7 +504,13 @@ export default function Page() {
 
 /* ------------ Helpers & Dialog ------------ */
 
-function groupByCategory(list: Item[]): [string, Item[]][] {
+function groupByCategory(
+  list: Item[],
+  opts: {
+    rankingMode: "rankFirst" | "popularityFirst";
+    decayedUse: (id: string) => number;
+  }
+): [string, Item[]][] {
   const map = new Map<string, Item[]>();
   for (const i of list) {
     const key = i.category || "Uncategorized";
@@ -442,19 +518,38 @@ function groupByCategory(list: Item[]): [string, Item[]][] {
     arr.push(i);
     map.set(key, arr);
   }
-  const sections = Array.from(map.entries()).sort(
-    (a, b) => (categoryOrder[a[0]] ?? 100) - (categoryOrder[b[0]] ?? 100)
-  );
+
+  const sections = Array.from(map.entries());
+
+  // Section ordering
+  if (opts.rankingMode === "popularityFirst") {
+    const score = (arr: Item[]) =>
+      arr.reduce((s, it) => s + 0.7 * opts.decayedUse(it.id) + 0.3 * (it.popularity ?? 0), 0);
+    sections.sort((a, b) => score(b[1]) - score(a[1]));
+  } else {
+    sections.sort((a, b) => (categoryOrder[a[0]] ?? 100) - (categoryOrder[b[0]] ?? 100));
+  }
+
+  // Item ordering inside each section
   return sections.map(([cat, items]) => {
-    items.sort((a, b) => {
-      const ra = (a as HasRank).rank ?? Number.POSITIVE_INFINITY;
-      const rb = (b as HasRank).rank ?? Number.POSITIVE_INFINITY;
-      if (ra !== rb) return ra - rb;
-      const pa = a.popularity ?? 0;
-      const pb = b.popularity ?? 0;
-      if (pa !== pb) return pb - pa;
-      return a.name.localeCompare(b.name);
-    });
+    if (opts.rankingMode === "popularityFirst") {
+      items.sort((a, b) => {
+        const sa = 0.7 * opts.decayedUse(a.id) + 0.3 * (a.popularity ?? 0);
+        const sb = 0.7 * opts.decayedUse(b.id) + 0.3 * (b.popularity ?? 0);
+        if (sa !== sb) return sb - sa;
+        return a.name.localeCompare(b.name);
+      });
+    } else {
+      items.sort((a, b) => {
+        const ra = (a as HasRank).rank ?? Number.POSITIVE_INFINITY;
+        const rb = (b as HasRank).rank ?? Number.POSITIVE_INFINITY;
+        if (ra !== rb) return ra - rb;
+        const pa = a.popularity ?? 0;
+        const pb = b.popularity ?? 0;
+        if (pa !== pb) return pb - pa;
+        return a.name.localeCompare(b.name);
+      });
+    }
     return [cat, items] as [string, Item[]];
   });
 }

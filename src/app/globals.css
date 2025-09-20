@@ -139,7 +139,7 @@ body {
 
 /* Chips */
 .chip {
-  @apply rounded-full border px-3 py-1.5 text-sm transition-colors;
+  @apply rounded-full border px-3 py-1.5 text-sm transition-colors  whitespace-nowrap;
   background: var(--chip);
   color: var(--chip-fg);
   border-color: var(--border);

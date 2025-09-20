@@ -61,4 +61,8 @@ export class Storage {
     r[id] = Date.now();
     writeJSON(RECENT_KEY, r);
   }
+  resetLearning() {
+    writeJSON(USAGE_KEY, {});
+    writeJSON(RECENT_KEY, {});
+  }
 }

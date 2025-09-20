@@ -11,12 +11,7 @@ export default function DocsPage() {
     <main className="mx-auto max-w-4xl p-6">
       <div className="flex items-center justify-between">
         <h1 className="text-3xl font-bold tracking-tight">Documentation</h1>
-        <div className="flex items-center gap-2">
-          <BackButton fallbackHref="/" />
-          <Link href="/" className="btn" title="Home">
-            Home
-          </Link>
-        </div>
+        <BackButton fallbackHref="/" /> {/* removed the Home link */}
       </div>
       <p className="mt-2 text-sm" style={{ color: "var(--muted)" }}>
         Quick reference for search, copy presets, KaTeX, and JSON import/export.
@@ -119,6 +114,38 @@ type Item = {
     "popularity": 10
   }
 ]`}</pre>
+
+        <section className="mt-8 space-y-4">
+          <h2 className="text-xl font-semibold">Advanced LaTeX / Markdown tips</h2>
+          <ul className="list-disc pl-5 text-sm">
+            <li>
+              Inline math: <code>$v = v_0 + a t$</code>. Display math: <code>$$E=mc^2$$</code> (if your target supports
+              it).
+            </li>
+            <li>
+              Fractions: <code>{"\\frac{a}{b}"}</code>, roots: <code>{"\\sqrt{x}"}</code>, subscripts/superscripts:{" "}
+              <code>{"v_0"}</code>, <code>{"x^2"}</code>.
+            </li>
+            <li>
+              Greek: <code>{"\\alpha, \\beta, \\gamma"}</code>; vectors: <code>{"\\vec{v}"}</code>,{" "}
+              <code>{"\\hat{n}"}</code>; parentheses sizing: <code>{"\\left( ... \\right)"}</code>.
+            </li>
+            <li>
+              Units (plain Markdown): wrap numbers in backticks and keep units outside: <code>`9.81` m s^-2</code>.
+            </li>
+          </ul>
+          <p className="text-sm">
+            See:{" "}
+            <a
+              href="https://katex.org/docs/supported.html"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="underline"
+            >
+              KaTeX supported functions & symbols
+            </a>
+          </p>
+        </section>
 
         <p className="text-sm font-medium">Tips</p>
         <ul className="list-disc pl-5 text-sm">

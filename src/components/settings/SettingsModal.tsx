@@ -6,6 +6,9 @@ import { getPrefs, setPrefs, Prefs, CopyPreset } from "@/lib/prefs";
 import { useEffect, useState } from "react";
 import Modal from "../Modal";
 
+import { Storage } from "@/lib/storage";
+const storage = new Storage();
+
 const presetHints: Record<CopyPreset, string> = {
   plain_compact: "Minimal plain text (single line). Great for terminals and quick pastes.",
   plain_verbose: "Plain text with more context on multiple lines.",
@@ -155,6 +158,64 @@ export default function SettingsModal({
             </p>
           </details>
         </section>
+
+        <section>
+          <h4 className="text-sm font-medium">Ranking</h4>
+          <div className="mt-2 segmented">
+            <button
+              className="btn"
+              aria-pressed={(prefs.rankingMode ?? "rankFirst") === "rankFirst"}
+              onClick={() => update("rankingMode", "rankFirst")}
+              title="Use explicit section order and per-item rank when no query."
+            >
+              Explicit order
+            </button>
+            <button
+              className="btn"
+              aria-pressed={prefs.rankingMode === "popularityFirst"}
+              onClick={() => update("rankingMode", "popularityFirst")}
+              title="Order sections & items by learned usage + seed popularity when no query."
+            >
+              Popularity-first
+            </button>
+          </div>
+          <div className="mt-2 text-xs" style={{ color: "var(--muted)" }}>
+            Popularity uses your copy history (decays over time) and seed popularity.
+          </div>
+        </section>
+
+        <div className="mt-3">
+          <button
+            className="btn"
+            onClick={() => {
+              storage.resetLearning();
+              // Tell the page to recompute (expose onChange if you prefer)
+              const merged = setPrefs({}); // no-op write; keeps prefs intact
+              onChange?.(merged);
+              // Optional: toast inside the modal if you have one
+            }}
+            title="Clears learned usage/recency; keeps your items."
+          >
+            Reset ranking history
+          </button>
+        </div>
+
+        <div className="mt-3">
+          <label
+            className="text-sm flex items-center gap-2"
+            title="Half-life in days for learned usage. Set 0 to disable decay."
+          >
+            <span>Decay half-life (days)</span>
+            <input
+              type="number"
+              min={0}
+              step={1}
+              value={prefs.rankingHalfLifeDays ?? 14}
+              onChange={(e) => update("rankingHalfLifeDays", Math.max(0, Number(e.currentTarget.value || 0)))}
+              className="w-24 input"
+            />
+          </label>
+        </div>
 
         {/* KaTeX */}
         <section>

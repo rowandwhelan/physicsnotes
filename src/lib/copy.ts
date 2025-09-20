@@ -72,25 +72,38 @@ export function buildCopy(i: Item, prefs: Prefs): string {
   }
 
   if (prefs.copyPreset === "markdown_inline") {
-    const base =
-      i.kind === "constant"
-        ? `**${name || i.symbol}**${i.value ? ` = \`${i.value}\`` : ""}${
-            t.includeUnits && i.units ? ` ${i.units}` : ""
-          }`
-        : `**${name || i.symbol}**${i.latex ? `: \`$${i.latex}$\`` : i.text ? ` — ${i.text}` : ""}`;
-    const meta = [cat, src].filter(Boolean).join(" | ");
-    return [base, meta ? `\n\n> ${meta}` : ""].join("");
+    const head = nameWithSym.trim(); // respects toggles
+    const eqInline = i.latex ? `$${i.latex}$` : "";
+    if (i.kind === "constant") {
+      const units = t.includeUnits && i.units ? ` ${i.units}` : "";
+      const value = i.value ? `\`${i.value}\`${units}` : "";
+      // Build: [**Head** = value] OR [value only] if no head
+      const main = head ? `**${head}**${value ? ` = ${value}` : ""}` : value || eqInline || (text ? `_${text}_` : "");
+      const meta = [cat, src].filter(Boolean).join(" | ");
+      return [main, meta ? `\n\n> ${meta}` : ""].join("");
+    } else {
+      // equations
+      const main = head
+        ? `**${head}**${eqInline ? `: \`${eqInline}\`` : text ? ` — ${text}` : ""}`
+        : eqInline
+        ? `\`${eqInline}\``
+        : text || "";
+      const meta = [cat, src].filter(Boolean).join(" | ");
+      return [main, meta ? `\n\n> ${meta}` : ""].join("");
+    }
   }
 
   if (prefs.copyPreset === "markdown_fenced") {
-    const head = `**${nameWithSym || i.symbol || ""}**${text ? ` — ${text}` : ""}`;
+    const head = nameWithSym.trim();
     const body = i.latex
       ? `\n\n\`\`\`tex\n${i.latex}\n\`\`\``
-      : i.value
+      : i.kind === "constant" && i.value
       ? `\n\n\`${i.value}\`${t.includeUnits && i.units ? ` ${i.units}` : ""}`
       : "";
     const meta = [cat, src].filter(Boolean).join(" | ");
-    return [head, body, meta ? `\n\n> ${meta}` : ""].join("");
+    // If no head (both name & symbol disabled), don’t emit an empty **…**
+    const title = head ? `**${head}**${text ? ` — ${text}` : ""}` : text || "";
+    return [title, body, meta ? `\n\n> ${meta}` : ""].join("");
   }
 
   // Fallback

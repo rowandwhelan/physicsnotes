@@ -17,16 +17,20 @@ export type CopyToggles = {
   includeSource: boolean;
 };
 
+function hasWindow() {
+  return typeof window !== "undefined" && !!window.localStorage;
+}
+
+export type RankingMode = "rankFirst" | "popularityFirst";
+
 export type Prefs = {
   copyPreset: CopyPreset;
   copyToggles: CopyToggles;
   katexInline: boolean;
   themeChoice?: "auto" | "light" | "dark";
+  rankingMode?: RankingMode; // NEW
+  rankingHalfLifeDays?: number; // NEW (decay)
 };
-
-function hasWindow() {
-  return typeof window !== "undefined" && !!window.localStorage;
-}
 
 function defaults(): Prefs {
   return {
@@ -40,6 +44,8 @@ function defaults(): Prefs {
       includeSource: false,
     },
     katexInline: true,
+    rankingMode: "rankFirst",
+    rankingHalfLifeDays: 30,
   };
 }
 
