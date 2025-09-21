@@ -258,3 +258,58 @@ body {
   outline-offset: 0;
   background: var(--elevated);
 }
+
+/* Inline code chips in prose (NOT fenced blocks) */
+:where(main) :not(pre) > code {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.1rem 0.4rem; /* compact chip feel */
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--muted-surface);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+  font-size: 0.9em;
+  line-height: 1.6;
+}
+
+/* Keep fenced blocks untouched */
+pre code {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  border-radius: 0;
+}
+
+/* Fenced code blocks (``` ... ```) */
+.prose pre,
+pre.code-block {
+  margin: 0.75rem 0;
+  padding: 0.875rem 1rem;
+  background: var(--elevated);
+  border: 1px solid var(--border); /* subtle frame to match inline code */
+  border-radius: 10px; /* softer than inline pills */
+  box-shadow: 0 1px 0 rgba(0, 0, 0, 0.03); /* barely-there lift */
+  overflow: auto; /* horizontal scroll if needed */
+  -webkit-overflow-scrolling: touch;
+}
+
+/* Keep inner code transparent so the pre’s background shows through */
+.prose pre code,
+pre.code-block code {
+  background: transparent;
+  border: 0;
+  padding: 0;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+  font-size: 0.9rem;
+  line-height: 1.5;
+  white-space: pre; /* no wrapping inside fenced blocks */
+}
+
+/* Optional: tighter top/bottom spacing when preceded/followed by headings or paragraphs */
+.prose h2 + pre,
+.prose h3 + pre {
+  margin-top: 0.5rem;
+}
+.prose pre + p {
+  margin-top: 0.5rem;
+}

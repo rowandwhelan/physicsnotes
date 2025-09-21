@@ -17,6 +17,7 @@ import clsx from "clsx";
 import Menu from "@/components/ui/Menu";
 import HScroll from "@/components/ui/HScroll";
 import Modal from "@/components/Modal";
+import TagsInput from "@/components/ui/TagsInput";
 
 /* ----------------- Setup ----------------- */
 
@@ -206,6 +207,18 @@ export default function Page() {
     recentSnapshot,
   ]);
 
+  // helper: first visible item after grouping (respects category order)
+  const firstVisible = useCallback((): Item | undefined => {
+    const groups = groupByCategory(ranked, {
+      rankingMode: prefs.rankingMode ?? "rankFirst",
+      decayedUse: () => 0,
+    });
+    const firstGroup = groups[0];
+    if (!firstGroup) return undefined;
+    const [, list] = firstGroup;
+    return list[0];
+  }, [ranked, prefs.rankingMode]);
+
   // Keyboard:
   // - Ctrl/Cmd+K focuses search
   // - Enter copies top result when NO modal is open, regardless of focus (so it works on the page or inside the search)
@@ -215,9 +228,7 @@ export default function Page() {
       if (modalOpen) return;
 
       const onSearch = document.activeElement === searchRef.current;
-      const wantsCopy =
-        (e.key === "Enter" && onSearch) || // Enter in search
-        ((e.ctrlKey || e.metaKey) && e.key === "Enter"); // Ctrl/Cmd+Enter anywhere
+      const wantsCopy = (e.key === "Enter" && onSearch) || ((e.ctrlKey || e.metaKey) && e.key === "Enter");
 
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "k") {
         e.preventDefault();
@@ -225,13 +236,9 @@ export default function Page() {
         return;
       }
 
-      // Prevent accidental Enter copies on the bare page when query is empty
       if (wantsCopy && !e.isComposing) {
-        // if the query is empty and not in the search box, do nothing
         if (!onSearch && query.trim().length === 0) return;
-        // if nothing is rendered, do nothing
-        if (ranked.length === 0) return;
-        const first = ranked[0];
+        const first = firstVisible();
         if (first) {
           e.preventDefault();
           handleCopy(first, prefs);
@@ -240,7 +247,7 @@ export default function Page() {
     }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [prefs, ranked, handleCopy, showAdd, showSettings, query]);
+  }, [prefs, handleCopy, showAdd, showSettings, query, firstVisible]);
 
   // Rerank mode pulse (soften the reordering perception)
   const handleRerankModeChange = useCallback(() => {
@@ -398,10 +405,27 @@ export default function Page() {
                       </p>
                     )}
 
-                    {/* show LaTeX:
-    - equations always,
-    - constants only if user enabled it and LaTeX exists */}
-                    {(i.kind === "equation" || (i.kind === "constant" && prefs.showConstantLatex)) && i.latex && (
+                    {/* constants: show LaTeX if enabled & present; else value/units */}
+                    {i.kind === "constant" ? (
+                      prefs.showConstantLatex ? (
+                        i.latex ? (
+                          <div className="mt-2">
+                            <MathTex latex={i.latex} />
+                          </div>
+                        ) : i.value ? (
+                          <p className="mt-1 font-mono text-sm">
+                            {i.value} {i.units ?? ""}
+                          </p>
+                        ) : null
+                      ) : i.value ? (
+                        <p className="mt-1 font-mono text-sm">
+                          {i.value} {i.units ?? ""}
+                        </p>
+                      ) : null
+                    ) : null}
+
+                    {/* equations: always show LaTeX (when present) */}
+                    {i.kind === "equation" && i.latex && (
                       <div className="mt-2">
                         <MathTex latex={i.latex} />
                       </div>
@@ -769,20 +793,12 @@ function AddDialog({
             <span className="mb-1 block" style={{ color: "var(--muted)" }}>
               Tags (comma separated)
             </span>
-            <input
-              className="input w-full"
-              placeholder="kinematics, acceleration, projectile"
-              value={form.tags?.join(", ") ?? ""}
-              onChange={(e) =>
-                setForm({
-                  ...form,
-                  tags: e.currentTarget.value
-                    .split(",")
-                    .map((s: string) => s.trim())
-                    .filter(Boolean),
-                })
-              }
-            />
+            <label className="text-sm sm:col-span-2">
+              <span className="mb-1 block" style={{ color: "var(--muted)" }}>
+                Tags
+              </span>
+              <TagsInput value={form.tags ?? []} onChange={(tags) => setForm({ ...form, tags })} />
+            </label>
           </label>
         </div>
 
