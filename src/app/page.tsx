@@ -60,6 +60,28 @@ export default function Page() {
   const { toast } = useToast();
   const searchRef = useRef<HTMLInputElement>(null);
 
+  // inside Page component
+  const [stickyEnabled, setStickyEnabled] = useState(false);
+  useEffect(() => {
+    // defer to client so SSR/CSR markup initially match
+    setStickyEnabled(!!prefs.stickySearchBar);
+  }, [prefs.stickySearchBar]);
+
+  // stuck state via IntersectionObserver
+  const sentinelRef = useRef<HTMLDivElement>(null);
+  const [stuck, setStuck] = useState(false);
+  useEffect(() => {
+    if (!stickyEnabled) return;
+    const el = sentinelRef.current;
+    if (!el) return;
+    const io = new IntersectionObserver(
+      ([entry]) => setStuck(!entry.isIntersecting),
+      { threshold: 1 } // when the sentinel scrolls off, we’re “stuck”
+    );
+    io.observe(el);
+    return () => io.disconnect();
+  }, [stickyEnabled]);
+
   // Init data
   useEffect(() => {
     const stored = storage.getAll();
@@ -278,7 +300,7 @@ export default function Page() {
   /* ---------- Render ---------- */
 
   return (
-    <main className="mx-auto max-w-5xl p-6">
+    <main className="mx-auto max-w-6xl p-6">
       {/* Header */}
       <header className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
         <div>
@@ -298,52 +320,69 @@ export default function Page() {
         </div>
       </header>
 
-      {/* Command bar */}
-      <section className="mt-6 flex flex-col gap-3">
-        <label
-          className="group/input relative flex items-center gap-2 rounded-md border px-3 py-2 shadow-sm
-             focus-within:outline-2 focus-within:outline-offset-2 [outline-color:var(--ring)]"
-          style={{ background: "var(--card)", borderColor: "var(--border)" }}
-        >
-          <Search className="h-5 w-5" style={{ color: "var(--muted)" }} />
-          <input
-            ref={searchRef}
-            aria-label="Search formulas and constants"
-            placeholder="Search by name, symbol, tags, or text…"
-            value={query}
-            onChange={(e) => setQuery(e.currentTarget.value)}
-            className="w-full bg-transparent text-sm placeholder:[color:var(--muted)]
-               outline-none focus:outline-none focus-visible:outline-none ring-0 border-0"
-          />
-          {query.length > 0 && (
-            <button
-              aria-label="Clear search"
-              className="absolute right-2 inline-flex h-6 w-6 items-center justify-center rounded hover:[background:var(--elevated-hover)]"
-              onClick={() => {
-                setQuery("");
-                searchRef.current?.focus();
-              }}
-            >
-              <X className="h-4 w-4" />
-            </button>
-          )}
-        </label>
+      {/* sentinel goes ABOVE the sticky strip so we can detect "stuck" */}
+      {stickyEnabled && <div ref={sentinelRef} aria-hidden className="h-0" />}
 
-        <HScroll className="-mx-1 overflow-x-auto pb-1">
-          <div className="flex min-w-fit items-center gap-2 px-1">
-            {categories.map((opt) => (
-              <button
-                key={opt.label}
-                onClick={() => setCategory(opt.value)}
-                className="chip"
-                data-selected={opt.value === category ? "true" : "false"}
-                title={opt.label}
-              >
-                <span className="truncate max-w-[32ch]">{opt.label}</span>
-              </button>
-            ))}
+      {/* Command bar */}
+      <section className={clsx("mt-6", stickyEnabled && "sticky top-0 z-40")}>
+        {/* Full-width blurred background; border only when actually stuck */}
+        <div
+          className={clsx(
+            stickyEnabled &&
+              "-mx-[max(0px,calc((100vw-100%)/2))] px-[max(0px,calc((100vw-100%)/2))] " +
+                "backdrop-blur-2xl bg-[color:var(--bg)]/70",
+            stuck && "border-b"
+          )}
+          style={stuck ? { borderColor: "var(--border)" } : undefined}
+        >
+          {/* centered content with comfy vertical padding */}
+          <div className="mx-auto max-w-6xl space-y-2.5 py-1.5">
+            <label
+              className="group/input relative flex items-center gap-2 rounded-md border px-3 py-2 shadow-sm
+                   focus-within:outline-2 focus-within:outline-offset-2 [outline-color:var(--ring)]"
+              style={{ background: "var(--card)", borderColor: "var(--border)" }}
+            >
+              <Search className="h-5 w-5" style={{ color: "var(--muted)" }} />
+              <input
+                ref={searchRef}
+                aria-label="Search formulas and constants"
+                placeholder="Search by name, symbol, tags, or text…"
+                value={query}
+                onChange={(e) => setQuery(e.currentTarget.value)}
+                className="w-full bg-transparent text-sm placeholder:[color:var(--muted)]
+                     outline-none focus:outline-none focus-visible:outline-none ring-0 border-0"
+              />
+              {query.length > 0 && (
+                <button
+                  aria-label="Clear search"
+                  className="absolute right-2 inline-flex h-6 w-6 items-center justify-center rounded hover:[background:var(--elevated-hover)]"
+                  onClick={() => {
+                    setQuery("");
+                    searchRef.current?.focus();
+                  }}
+                >
+                  <X className="h-4 w-4" />
+                </button>
+              )}
+            </label>
+
+            <HScroll className="-mx-1 overflow-x-auto pb-1 no-scrollbar">
+              <div className="flex min-w-fit items-center gap-2 px-1">
+                {categories.map((opt) => (
+                  <button
+                    key={opt.label}
+                    onClick={() => setCategory(opt.value)}
+                    className="chip"
+                    data-selected={opt.value === category ? "true" : "false"}
+                    title={opt.label}
+                  >
+                    <span className="truncate max-w-[32ch]">{opt.label}</span>
+                  </button>
+                ))}
+              </div>
+            </HScroll>
           </div>
-        </HScroll>
+        </div>
       </section>
 
       {/* Empty state */}
@@ -379,7 +418,7 @@ export default function Page() {
         }).map(([cat, list]) => (
           <div key={cat}>
             <h2 className="mb-4 text-xl font-semibold">{cat}</h2>
-            <div className="grid gap-3 sm:gap-4 md:gap-5 sm:grid-cols-2 md:grid-cols-3">
+            <div className="grid gap-3 sm:gap-4 md:gap-5 sm:grid-cols-2 lg:grid-cols-3">
               {list.map((i) => (
                 <Card key={i.id}>
                   <div className="flex flex-col">
@@ -398,18 +437,11 @@ export default function Page() {
                       </p>
                     )}
 
-                    {/* show value/units only for constants (unless LaTeX rendering is enabled) */}
-                    {i.kind === "constant" && !prefs.showConstantLatex && i.value && (
-                      <p className="mt-1 font-mono text-sm">
-                        {i.value} {i.units ?? ""}
-                      </p>
-                    )}
-
                     {/* constants: show LaTeX if enabled & present; else value/units */}
                     {i.kind === "constant" ? (
                       prefs.showConstantLatex ? (
                         i.latex ? (
-                          <div className="mt-2">
+                          <div className="mt-2.5">
                             <MathTex latex={i.latex} />
                           </div>
                         ) : i.value ? (
@@ -426,7 +458,7 @@ export default function Page() {
 
                     {/* equations: always show LaTeX (when present) */}
                     {i.kind === "equation" && i.latex && (
-                      <div className="mt-2">
+                      <div className="mt-2.5">
                         <MathTex latex={i.latex} />
                       </div>
                     )}
@@ -557,10 +589,23 @@ function groupByCategory(
 
   // Section ordering
   if (opts.rankingMode === "popularityFirst") {
-    const score = (arr: Item[]) =>
-      arr.reduce((s, it) => s + 0.7 * opts.decayedUse(it.id) + 0.3 * (it.popularity ?? 0), 0);
-    sections.sort((a, b) => score(b[1]) - score(a[1]));
+    const sectionAvg = (arr: Item[]) => {
+      if (!arr.length) return 0;
+      const sum = arr.reduce((s, it) => s + (0.7 * opts.decayedUse(it.id) + 0.3 * (it.popularity ?? 0)), 0);
+      return sum / arr.length; // << average, not total
+    };
+    sections.sort((a, b) => {
+      const sa = sectionAvg(a[1]);
+      const sb = sectionAvg(b[1]);
+      if (sb !== sa) return sb - sa;
+      // tie-breakers so order is stable
+      const maxA = Math.max(...a[1].map((it) => 0.7 * opts.decayedUse(it.id) + 0.3 * (it.popularity ?? 0)));
+      const maxB = Math.max(...b[1].map((it) => 0.7 * opts.decayedUse(it.id) + 0.3 * (it.popularity ?? 0)));
+      if (maxB !== maxA) return maxB - maxA;
+      return a[0].localeCompare(b[0]);
+    });
   } else {
+    // (unchanged explicit-order branch)
     sections.sort((a, b) => (categoryOrder[a[0]] ?? 100) - (categoryOrder[b[0]] ?? 100));
   }
 

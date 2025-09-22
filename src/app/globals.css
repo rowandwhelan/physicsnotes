@@ -139,15 +139,30 @@ body {
 
 /* Chips */
 .chip {
-  @apply rounded-full border px-3 py-1.5 text-sm transition-colors  whitespace-nowrap;
+  @apply rounded-full border px-3 py-1.5 text-sm transition-colors whitespace-nowrap;
   background: var(--chip);
   color: var(--chip-fg);
   border-color: var(--border);
+  cursor: pointer; /* makes it feel clickable */
+  transition: background-color 0.15s ease, color 0.15s ease, border-color 0.15s ease, transform 0.06s ease;
+}
+.chip:hover {
+  background: var(--elevated-hover); /* subtle hover */
+}
+.chip:active {
+  transform: translateY(1px); /* tiny press feedback */
 }
 .chip[data-selected="true"] {
   background: var(--chip-selected);
   color: var(--chip-selected-fg);
   border-color: transparent;
+}
+.chip[data-selected="true"]:hover {
+  filter: brightness(0.98); /* gentle hover even when selected */
+}
+.chip:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
 }
 
 /* Code-ish block used as KaTeX fallback */
@@ -312,4 +327,13 @@ pre.code-block code {
 }
 .prose pre + p {
   margin-top: 0.5rem;
+}
+
+/* Hide scrollbar cross-browser */
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+.no-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
 }

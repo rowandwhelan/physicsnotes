@@ -31,6 +31,7 @@ export type Prefs = {
   rankingHalfLifeDays?: number;
   instantRerankOnCopy?: boolean; // keep, default false
   showConstantLatex?: boolean; // constants render LaTeX when present
+  stickySearchBar?: boolean; // (default false)
 };
 
 function defaults(): Prefs {
@@ -48,6 +49,7 @@ function defaults(): Prefs {
     rankingHalfLifeDays: 30,
     instantRerankOnCopy: false,
     showConstantLatex: false,
+    stickySearchBar: false,
   };
 }
 

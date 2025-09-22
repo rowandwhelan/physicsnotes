@@ -460,6 +460,22 @@ export default function SettingsModal({
                   Ranks refresh on reload or when switching mode. Enable “Instant re-rank” for immediate updates.
                 </p>
 
+                {/* UI behavior */}
+                <div>
+                  <h5 className="text-sm font-medium">UI behavior</h5>
+                  <label
+                    className="mt-2 text-sm flex items-center gap-2"
+                    title="Keep the search bar pinned while scrolling."
+                  >
+                    <input
+                      type="checkbox"
+                      checked={!!prefs.stickySearchBar}
+                      onChange={(e) => update("stickySearchBar", e.currentTarget.checked)}
+                    />
+                    Stick the search bar to the top
+                  </label>
+                </div>
+
                 {/* Data */}
                 <div>
                   <h5 className="text-sm font-medium">Data</h5>
