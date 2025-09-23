@@ -590,7 +590,19 @@ export default function Page() {
             }}
           >
             {/* the tiny anchor lives inside the section */}
-            <span className="cat-anchor" data-anchor={cat} aria-hidden />
+            <span
+              className="cat-anchor"
+              data-anchor={cat}
+              aria-hidden
+              ref={(el) => {
+                if (el) {
+                  anchorRefs.current[cat] = el;
+                } else {
+                  delete anchorRefs.current[cat];
+                }
+              }}
+            />
+
             <h2 className="mb-4 text-xl font-semibold">{cat}</h2>
             <div className="grid gap-3 sm:gap-4 md:gap-5 sm:grid-cols-2 lg:grid-cols-3">
               {list.map((i) => (
