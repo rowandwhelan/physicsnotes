@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import Fuse from "fuse.js";
 import { Search, Clipboard, Check, MoreVertical, Plus, Settings as SettingsIcon, X } from "lucide-react";
 import Button from "@/components/ui/Button";
@@ -60,6 +60,44 @@ export default function Page() {
   const { toast } = useToast();
   const searchRef = useRef<HTMLInputElement>(null);
 
+  // refs for snapping
+  const sectionRefs = useRef<Record<string, HTMLElement | null>>({}); // per-section ref by category
+  const commandRef = useRef<HTMLDivElement>(null); // sticky bar content (to measure height)
+  useEffect(() => {
+    function setSnapTopVar() {
+      const h = commandRef.current?.offsetHeight ?? 0;
+      document.documentElement.style.setProperty("--snap-top", `${h + 6}px`);
+    }
+    setSnapTopVar();
+    window.addEventListener("resize", setSnapTopVar);
+    return () => window.removeEventListener("resize", setSnapTopVar);
+  }, []);
+
+  const resultsRef = useRef<HTMLDivElement>(null);
+
+  type SectionBounds = { id: string; top: number; bottom: number };
+  const sectionIndexRef = useRef<Array<{ id: string; top: number; bottom: number }>>([]);
+
+  const ANCHOR_PAD = 6; // pixels under sticky bar to align headings
+  const EPS = 1; // tiny tolerance
+  const JUMP_LOCK_MS = 90; // absorb coalesced wheel ticks without latency
+  const jumpLockUntilRef = useRef(0);
+
+  // snap state (prevents double steps during smooth scrolling)
+
+  const minLockUntilRef = useRef(0);
+
+  // anchors are separate from the visual section wrappers
+  const anchorRefs = useRef<Record<string, HTMLSpanElement | null>>({});
+  type AnchorRow = { id: string; y: number }; // page Y of each anchor
+  const anchorIndexRef = useRef<AnchorRow[]>([]);
+
+  // Helper: current sticky offset (height of the search bar only when stuck)
+  function stickyOffsetPx() {
+    const h = commandRef.current?.offsetHeight ?? 0;
+    return stickyEnabled && stuck ? h : 0;
+  }
+
   // inside Page component
   const [stickyEnabled, setStickyEnabled] = useState(false);
   useEffect(() => {
@@ -81,6 +119,12 @@ export default function Page() {
     io.observe(el);
     return () => io.disconnect();
   }, [stickyEnabled]);
+
+  useEffect(() => {
+    const h = commandRef.current?.offsetHeight ?? 0;
+    // when stuck, use measured height; when not stuck, no offset
+    document.documentElement.style.setProperty("--sticky-height", stickyEnabled && stuck ? `${h}px` : "0px");
+  }, [stickyEnabled, stuck]);
 
   // Init data
   useEffect(() => {
@@ -297,6 +341,143 @@ export default function Page() {
     setShowAdd(false);
   }
 
+  // call after render / on resize / when results change
+  function rebuildSectionIndex() {
+    const pairs = Object.entries(sectionRefs.current)
+      .map(([cat, el]) => {
+        if (!el) return null;
+        const top = el.getBoundingClientRect().top + window.scrollY;
+        return { id: el.id || `cat-${cat}`, top, el };
+      })
+      .filter(Boolean) as Array<{ id: string; top: number; el: HTMLElement }>;
+
+    pairs.sort((a, b) => a.top - b.top);
+
+    const rows: SectionBounds[] = pairs.map((p, i) => {
+      const next = pairs[i + 1];
+      const bottom = next ? next.top : document.documentElement.scrollHeight;
+      return { id: p.id, top: p.top, bottom };
+    });
+
+    sectionIndexRef.current = rows;
+  }
+
+  function rebuildAnchorIndex() {
+    const pairs = Object.entries(anchorRefs.current)
+      .map(([cat, el]) => {
+        if (!el) return null;
+        const y = Math.round(window.scrollY + el.getBoundingClientRect().top);
+        return { id: cat, y };
+      })
+      .filter(Boolean) as AnchorRow[];
+
+    pairs.sort((a, b) => a.y - b.y);
+    anchorIndexRef.current = pairs;
+  }
+
+  // put near other helpers
+  const maxScrollY = () => Math.max(0, document.documentElement.scrollHeight - window.innerHeight);
+
+  // ensure we re-measure once fonts are ready (prevents off-by-one after KaTeX/webfonts)
+  useEffect(() => {
+    if (document.fonts?.ready) {
+      document.fonts.ready.then(() => requestAnimationFrame(rebuildSectionIndex));
+    }
+  }, []); // one-time
+
+  // rebuild when layout changes
+  useEffect(() => {
+    rebuildSectionIndex();
+    rebuildAnchorIndex(); // <— add
+    const ro = new ResizeObserver(() => {
+      rebuildSectionIndex();
+      rebuildAnchorIndex(); // <— add
+    });
+    ro.observe(document.documentElement);
+    window.addEventListener("resize", () => {
+      rebuildSectionIndex();
+      rebuildAnchorIndex(); // <— add
+    });
+    return () => {
+      ro.disconnect();
+      window.removeEventListener("resize", rebuildSectionIndex as any);
+    };
+  }, [ranked]);
+
+  useLayoutEffect(() => {
+    const id = requestAnimationFrame(() => {
+      rebuildSectionIndex();
+      rebuildAnchorIndex(); // <— add
+    });
+    return () => cancelAnimationFrame(id);
+  }, [rerankPulse, ranked, stickyEnabled, stuck]);
+
+  // Put this helper near your other hooks
+  const getSectionNodes = useCallback(() => {
+    const root = resultsRef.current;
+    return root ? Array.from(root.querySelectorAll<HTMLElement>('[data-section="cat"]')) : [];
+  }, []);
+
+  // Shift+scroll: jump by anchor (immune to tall sections & hit-testing)
+  useEffect(() => {
+    const LOCK_MS = 240; // absorb coalesced ticks during smooth scroll
+    let lockUntil = 0;
+
+    function onWheel(e: WheelEvent) {
+      if (!e.shiftKey) return;
+
+      const anchors = anchorIndexRef.current;
+      if (!anchors.length) return;
+
+      // prefer horizontal delta for trackpads
+      const raw = Math.abs(e.deltaX) > Math.abs(e.deltaY) ? e.deltaX : e.deltaY;
+      if (raw === 0) return;
+
+      e.preventDefault();
+
+      const now = performance.now();
+      if (now < lockUntil) return;
+
+      const dir: 1 | -1 = raw > 0 ? 1 : -1;
+      const step = e.altKey ? 2 : 1;
+
+      // Anchor line at the sticky bar (just under it)
+      const stickyH = (stickyEnabled && stuck ? commandRef.current?.offsetHeight ?? 0 : 0) + 6;
+      const anchorLine = window.scrollY + stickyH + 1;
+
+      // Find current index = last anchor with y <= anchorLine (binary search)
+      let lo = 0,
+        hi = anchors.length - 1,
+        cur = 0;
+      while (lo <= hi) {
+        const mid = (lo + hi) >> 1;
+        if (anchors[mid].y <= anchorLine) {
+          cur = mid;
+          lo = mid + 1;
+        } else {
+          hi = mid - 1;
+        }
+      }
+
+      let next = Math.max(0, Math.min(anchors.length - 1, cur + dir * step));
+      if (next === cur) return; // edge
+
+      const targetY = anchors[next].y; // already pre-offset by the .cat-anchor CSS
+      lockUntil = now + LOCK_MS;
+
+      // Smooth, reliable, and no dead-zones
+      window.scrollTo({ top: targetY, behavior: "smooth" });
+
+      // lightweight unlock in case 'scrollend' doesn't fire
+      window.setTimeout(() => {
+        lockUntil = 0;
+      }, LOCK_MS + 80);
+    }
+
+    window.addEventListener("wheel", onWheel, { passive: false });
+    return () => window.removeEventListener("wheel", onWheel);
+  }, [stickyEnabled, stuck]);
+
   /* ---------- Render ---------- */
 
   return (
@@ -336,7 +517,7 @@ export default function Page() {
           style={stuck ? { borderColor: "var(--border)" } : undefined}
         >
           {/* centered content with comfy vertical padding */}
-          <div className="mx-auto max-w-6xl space-y-2.5 py-1.5">
+          <div ref={commandRef} className="mx-auto max-w-6xl space-y-2.5 py-1.5">
             <label
               className="group/input relative flex items-center gap-2 rounded-md border px-3 py-2 shadow-sm
                    focus-within:outline-2 focus-within:outline-offset-2 [outline-color:var(--ring)]"
@@ -401,7 +582,7 @@ export default function Page() {
       )}
 
       {/* Results (pulse key to trigger a light fade-in) */}
-      <section key={rerankPulse} className="mt-8 space-y-8">
+      <section ref={resultsRef} key={rerankPulse} className="mt-8 space-y-8">
         {groupByCategory(ranked, {
           rankingMode: prefs.rankingMode ?? "rankFirst",
           decayedUse: (id: string) => {
@@ -416,133 +597,139 @@ export default function Page() {
             return (usage[id] ?? 0) * decay;
           },
         }).map(([cat, list]) => (
-          <div key={cat}>
-            <h2 className="mb-4 text-xl font-semibold">{cat}</h2>
-            <div className="grid gap-3 sm:gap-4 md:gap-5 sm:grid-cols-2 lg:grid-cols-3">
-              {list.map((i) => (
-                <Card key={i.id}>
-                  <div className="flex flex-col">
-                    <div className="flex items-center gap-2">
-                      <h3 className="text-base font-semibold">{i.name}</h3>
-                      {i.symbol && (
-                        <span className="rounded px-2 py-0.5 text-xs" style={{ background: "var(--muted-surface)" }}>
-                          {i.symbol}
-                        </span>
+          <>
+            <span
+              className="cat-anchor"
+              data-anchor={cat}
+              ref={(el) => {
+                anchorRefs.current[cat] = el;
+              }}
+            />
+            <section
+              key={cat}
+              data-section="cat"
+              ref={(el) => {
+                sectionRefs.current[cat] = el;
+              }}
+            >
+              <h2 className="mb-4 text-xl font-semibold">{cat}</h2>
+              <div className="grid gap-3 sm:gap-4 md:gap-5 sm:grid-cols-2 lg:grid-cols-3">
+                {list.map((i) => (
+                  <Card key={i.id}>
+                    <div className="flex flex-col">
+                      <div className="flex items-center gap-2">
+                        <h3 className="text-base font-semibold">{i.name}</h3>
+                        {i.symbol && (
+                          <span className="rounded px-2 py-0.5 text-xs" style={{ background: "var(--muted-surface)" }}>
+                            {i.symbol}
+                          </span>
+                        )}
+                      </div>
+
+                      {i.text && (
+                        <p className="mt-1 text-sm" style={{ color: "var(--muted)" }}>
+                          {i.text}
+                        </p>
+                      )}
+
+                      {/* constants: show LaTeX if enabled & present */}
+                      {i.kind === "constant" && prefs.showConstantLatex && i.latex && (
+                        <div className="mt-2.5">
+                          <MathTex latex={i.latex} label={`${i.name} (${i.id})`} />
+                        </div>
+                      )}
+
+                      {/* equations: always show LaTeX */}
+                      {i.kind === "equation" && i.latex && (
+                        <div className="mt-2.5">
+                          <MathTex latex={i.latex} label={`${i.name} (${i.id})`} />
+                        </div>
+                      )}
+
+                      {i.tags?.length > 0 && (
+                        <div className="mt-2 flex flex-wrap gap-1">
+                          {i.tags.map((t) => (
+                            <span
+                              key={t}
+                              className="rounded px-2 py-0.5 text-xs"
+                              style={{ background: "var(--muted-surface)" }}
+                            >
+                              {t}
+                            </span>
+                          ))}
+                        </div>
                       )}
                     </div>
 
-                    {i.text && (
-                      <p className="mt-1 text-sm" style={{ color: "var(--muted)" }}>
-                        {i.text}
-                      </p>
-                    )}
-
-                    {/* constants: show LaTeX if enabled & present; else value/units */}
-                    {i.kind === "constant" ? (
-                      prefs.showConstantLatex ? (
-                        i.latex ? (
-                          <div className="mt-2.5">
-                            <MathTex latex={i.latex} />
-                          </div>
-                        ) : i.value ? (
-                          <p className="mt-1 font-mono text-sm">
-                            {i.value} {i.units ?? ""}
-                          </p>
-                        ) : null
-                      ) : i.value ? (
-                        <p className="mt-1 font-mono text-sm">
-                          {i.value} {i.units ?? ""}
-                        </p>
-                      ) : null
-                    ) : null}
-
-                    {/* equations: always show LaTeX (when present) */}
-                    {i.kind === "equation" && i.latex && (
-                      <div className="mt-2.5">
-                        <MathTex latex={i.latex} />
-                      </div>
-                    )}
-
-                    {i.tags?.length > 0 && (
-                      <div className="mt-2 flex flex-wrap gap-1">
-                        {i.tags.map((t) => (
-                          <span
-                            key={t}
-                            className="rounded px-2 py-0.5 text-xs"
-                            style={{ background: "var(--muted-surface)" }}
-                          >
-                            {t}
-                          </span>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-
-                  <div className="mt-3 flex items-center gap-2">
-                    <Button onClick={() => handleCopy(i, prefs)} className={clsx(copiedId === i.id && "scale-[0.99]")}>
-                      {copiedId === i.id ? <Check className="h-4 w-4" /> : <Clipboard className="h-4 w-4" />}
-                      {copiedId === i.id ? "Copied" : "Copy"}
-                    </Button>
-
-                    <Menu
-                      button={
-                        <Button>
-                          <MoreVertical className="h-4 w-4" /> More
-                        </Button>
-                      }
-                    >
-                      <button
-                        className="block w-full rounded px-3 py-2 text-left text-sm hover:[background:var(--elevated-hover)]"
-                        onClick={() => {
-                          const m = setPrefs({ copyPreset: "latex_inline" });
-                          setLocalPrefs(m);
-                          handleCopy(i, m);
-                        }}
+                    <div className="mt-3 flex items-center gap-2">
+                      <Button
+                        onClick={() => handleCopy(i, prefs)}
+                        className={clsx(copiedId === i.id && "scale-[0.99]")}
                       >
-                        Copy as LaTeX (inline)
-                      </button>
-                      <button
-                        className="block w-full rounded px-3 py-2 text-left text-sm hover:[background:var(--elevated-hover)]"
-                        onClick={() => {
-                          const m = setPrefs({ copyPreset: "markdown_inline" });
-                          setLocalPrefs(m);
-                          handleCopy(i, m);
-                        }}
+                        {copiedId === i.id ? <Check className="h-4 w-4" /> : <Clipboard className="h-4 w-4" />}
+                        {copiedId === i.id ? "Copied" : "Copy"}
+                      </Button>
+
+                      <Menu
+                        button={
+                          <Button>
+                            <MoreVertical className="h-4 w-4" /> More
+                          </Button>
+                        }
                       >
-                        Copy as Markdown (inline)
-                      </button>
-                      <button
-                        className="block w-full rounded px-3 py-2 text-left text-sm hover:[background:var(--elevated-hover)]"
-                        onClick={() => {
-                          const m = setPrefs({ copyPreset: "plain_compact" });
-                          setLocalPrefs(m);
-                          handleCopy(i, m);
-                        }}
-                      >
-                        Copy as Plain (compact)
-                      </button>
-                      {i.kind === "constant" && (
                         <button
                           className="block w-full rounded px-3 py-2 text-left text-sm hover:[background:var(--elevated-hover)]"
-                          onClick={async () => {
-                            const text = i.value ? `${i.value}${i.units ? ` ${i.units}` : ""}` : "";
-                            await navigator.clipboard.writeText(text);
-                            storage.markUsed(i.id);
-                            if (prefs.instantRerankOnCopy) setRerankPulse((x) => x + 1);
-                            setCopiedId(i.id);
-                            toast("Copied value");
-                            setTimeout(() => setCopiedId((x) => (x === i.id ? null : x)), 900);
+                          onClick={() => {
+                            const m = setPrefs({ copyPreset: "latex_inline" });
+                            setLocalPrefs(m);
+                            handleCopy(i, m);
                           }}
                         >
-                          Copy value only
+                          Copy as LaTeX (inline)
                         </button>
-                      )}
-                    </Menu>
-                  </div>
-                </Card>
-              ))}
-            </div>
-          </div>
+                        <button
+                          className="block w-full rounded px-3 py-2 text-left text-sm hover:[background:var(--elevated-hover)]"
+                          onClick={() => {
+                            const m = setPrefs({ copyPreset: "markdown_inline" });
+                            setLocalPrefs(m);
+                            handleCopy(i, m);
+                          }}
+                        >
+                          Copy as Markdown (inline)
+                        </button>
+                        <button
+                          className="block w-full rounded px-3 py-2 text-left text-sm hover:[background:var(--elevated-hover)]"
+                          onClick={() => {
+                            const m = setPrefs({ copyPreset: "plain_compact" });
+                            setLocalPrefs(m);
+                            handleCopy(i, m);
+                          }}
+                        >
+                          Copy as Plain (compact)
+                        </button>
+                        {i.kind === "constant" && (
+                          <button
+                            className="block w-full rounded px-3 py-2 text-left text-sm hover:[background:var(--elevated-hover)]"
+                            onClick={async () => {
+                              const text = i.value ? `${i.value}${i.units ? ` ${i.units}` : ""}` : "";
+                              await navigator.clipboard.writeText(text);
+                              storage.markUsed(i.id);
+                              if (prefs.instantRerankOnCopy) setRerankPulse((x) => x + 1);
+                              setCopiedId(i.id);
+                              toast("Copied value");
+                              setTimeout(() => setCopiedId((x) => (x === i.id ? null : x)), 900);
+                            }}
+                          >
+                            Copy value only
+                          </button>
+                        )}
+                      </Menu>
+                    </div>
+                  </Card>
+                ))}
+              </div>
+            </section>
+          </>
         ))}
       </section>
 

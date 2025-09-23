@@ -337,3 +337,24 @@ pre.code-block code {
   -ms-overflow-style: none;
   scrollbar-width: none;
 }
+
+/* Snap offset set from JS (command bar height + small pad) */
+:root {
+  --snap-top: 8px;
+}
+
+/* Make category sections respect the sticky bar when scrolled into view */
+[data-section="cat"] {
+  scroll-margin-top: calc(var(--sticky-height, 0px) + 6px); /* +6px pad */
+}
+
+/* === Jump Anchors (place near the bottom of your CSS file) === */
+.cat-anchor {
+  /* lives right before each category section */
+  position: relative;
+  /* pull the anchor up by sticky height + small pad so it ends up *under* the bar */
+  top: calc(-1 * var(--sticky-height, 0px) - 6px);
+  display: block;
+  height: 0; /* no layout impact */
+  pointer-events: none;
+}
