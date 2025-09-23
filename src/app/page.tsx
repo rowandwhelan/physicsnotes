@@ -615,7 +615,7 @@ export default function Page() {
                     {i.kind === "constant" &&
                       (prefs.showConstantLatex && i.latex ? (
                         <div className="mt-2.5">
-                          <MathTex latex={i.latex} label={`${i.name} (${i.id})`} />
+                          <MathTex latex={i.latex} />
                         </div>
                       ) : i.value ? (
                         <p className="mt-1 font-mono text-sm">
@@ -626,7 +626,7 @@ export default function Page() {
                     {/* equations: always show LaTeX */}
                     {i.kind === "equation" && i.latex && (
                       <div className="mt-2.5">
-                        <MathTex latex={i.latex} label={`${i.name} (${i.id})`} />
+                        <MathTex latex={i.latex} />
                       </div>
                     )}
 
