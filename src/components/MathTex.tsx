@@ -15,11 +15,9 @@ function sanitizeDanglingSubSup(s: string) {
 export default function MathTex({
   latex,
   inline,
-  label,
 }: {
   latex: string;
   inline?: boolean; // if omitted, $$...$$ triggers display mode
-  label?: string; // optional for debugging
 }) {
   const { html, isBlock } = useMemo(() => {
     const detectedBlock = inline === undefined ? /^\s*\$\$[\s\S]*\$\$\s*$/.test(latex) : !inline;
