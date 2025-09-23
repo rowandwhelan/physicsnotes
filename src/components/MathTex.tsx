@@ -12,7 +12,15 @@ function sanitizeDanglingSubSup(s: string) {
   return s;
 }
 
-export default function MathTex({ latex, inline, label }: { latex: string; inline?: boolean; label?: string }) {
+export default function MathTex({
+  latex,
+  inline,
+  label,
+}: {
+  latex: string;
+  inline?: boolean; // if omitted, $$...$$ triggers display mode
+  label?: string; // optional for debugging
+}) {
   const { html, isBlock } = useMemo(() => {
     const detectedBlock = inline === undefined ? /^\s*\$\$[\s\S]*\$\$\s*$/.test(latex) : !inline;
 
@@ -23,32 +31,32 @@ export default function MathTex({ latex, inline, label }: { latex: string; inlin
       isBlock: detectedBlock,
       html: katex.renderToString(src, {
         displayMode: detectedBlock,
-        output: "html", // ← no MathML (avoids <msub/> warnings)
+        output: "html", // no MathML => no <msub/> warnings
         throwOnError: false,
         strict: "ignore",
         trust: true,
         macros: {},
       }),
     };
-  }, [latex, inline, label]);
+  }, [latex, inline]);
 
+  // IMPORTANT: put .katex on the wrapper so you match your old sizing
   return (
     <>
-      {/* wrapper class is .mathtex (KaTeX still emits its own .katex inside) */}
-      <span className="mathtex" data-display={isBlock ? "true" : "false"} dangerouslySetInnerHTML={{ __html: html }} />
+      <span
+        className="katex mathtex"
+        data-display={isBlock ? "true" : "false"}
+        // KaTeX returns a root <span class="katex">…</span>, so this nests .katex exactly like your old version.
+        dangerouslySetInnerHTML={{ __html: html }}
+      />
       <style jsx global>{`
-        /* line up with your card text */
+        /* remove KaTeX's default center + extra margins in display mode */
         .mathtex .katex-display {
           margin: 0 !important;
           text-align: left !important;
         }
         .mathtex .katex-display > .katex {
           display: inline-block !important;
-        }
-        /* size like your “old” look – bump it a bit; tune with --mathtex-scale */
-        .mathtex .katex {
-          font-size: var(--mathtex-scale, 1.3em) !important;
-          line-height: 1.2 !important;
         }
       `}</style>
     </>

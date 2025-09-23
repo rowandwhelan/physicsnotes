@@ -78,25 +78,10 @@ export default function Page() {
   type SectionBounds = { id: string; top: number; bottom: number };
   const sectionIndexRef = useRef<Array<{ id: string; top: number; bottom: number }>>([]);
 
-  const ANCHOR_PAD = 6; // pixels under sticky bar to align headings
-  const EPS = 1; // tiny tolerance
-  const JUMP_LOCK_MS = 90; // absorb coalesced wheel ticks without latency
-  const jumpLockUntilRef = useRef(0);
-
-  // snap state (prevents double steps during smooth scrolling)
-
-  const minLockUntilRef = useRef(0);
-
   // anchors are separate from the visual section wrappers
   const anchorRefs = useRef<Record<string, HTMLSpanElement | null>>({});
   type AnchorRow = { id: string; y: number }; // page Y of each anchor
   const anchorIndexRef = useRef<AnchorRow[]>([]);
-
-  // Helper: current sticky offset (height of the search bar only when stuck)
-  function stickyOffsetPx() {
-    const h = commandRef.current?.offsetHeight ?? 0;
-    return stickyEnabled && stuck ? h : 0;
-  }
 
   // inside Page component
   const [stickyEnabled, setStickyEnabled] = useState(false);
@@ -342,7 +327,7 @@ export default function Page() {
   }
 
   // call after render / on resize / when results change
-  function rebuildSectionIndex() {
+  const rebuildSectionIndex = useCallback(() => {
     const pairs = Object.entries(sectionRefs.current)
       .map(([cat, el]) => {
         if (!el) return null;
@@ -360,9 +345,9 @@ export default function Page() {
     });
 
     sectionIndexRef.current = rows;
-  }
+  }, []);
 
-  function rebuildAnchorIndex() {
+  const rebuildAnchorIndex = useCallback(() => {
     const pairs = Object.entries(anchorRefs.current)
       .map(([cat, el]) => {
         if (!el) return null;
@@ -373,36 +358,37 @@ export default function Page() {
 
     pairs.sort((a, b) => a.y - b.y);
     anchorIndexRef.current = pairs;
-  }
-
-  // put near other helpers
-  const maxScrollY = () => Math.max(0, document.documentElement.scrollHeight - window.innerHeight);
+  }, []);
 
   // ensure we re-measure once fonts are ready (prevents off-by-one after KaTeX/webfonts)
   useEffect(() => {
     if (document.fonts?.ready) {
       document.fonts.ready.then(() => requestAnimationFrame(rebuildSectionIndex));
     }
-  }, []); // one-time
+  }, [rebuildSectionIndex]); // one-time
 
   // rebuild when layout changes
   useEffect(() => {
     rebuildSectionIndex();
-    rebuildAnchorIndex(); // <— add
+    rebuildAnchorIndex();
+
     const ro = new ResizeObserver(() => {
       rebuildSectionIndex();
-      rebuildAnchorIndex(); // <— add
+      rebuildAnchorIndex();
     });
     ro.observe(document.documentElement);
-    window.addEventListener("resize", () => {
+
+    const handleResize = () => {
       rebuildSectionIndex();
-      rebuildAnchorIndex(); // <— add
-    });
+      rebuildAnchorIndex();
+    };
+    window.addEventListener("resize", handleResize);
+
     return () => {
       ro.disconnect();
-      window.removeEventListener("resize", rebuildSectionIndex as any);
+      window.removeEventListener("resize", handleResize);
     };
-  }, [ranked]);
+  }, [ranked, rebuildSectionIndex, rebuildAnchorIndex]);
 
   useLayoutEffect(() => {
     const id = requestAnimationFrame(() => {
@@ -410,13 +396,7 @@ export default function Page() {
       rebuildAnchorIndex(); // <— add
     });
     return () => cancelAnimationFrame(id);
-  }, [rerankPulse, ranked, stickyEnabled, stuck]);
-
-  // Put this helper near your other hooks
-  const getSectionNodes = useCallback(() => {
-    const root = resultsRef.current;
-    return root ? Array.from(root.querySelectorAll<HTMLElement>('[data-section="cat"]')) : [];
-  }, []);
+  }, [rerankPulse, ranked, stickyEnabled, stuck, rebuildSectionIndex, rebuildAnchorIndex]);
 
   useLayoutEffect(() => {
     const h = commandRef.current?.offsetHeight ?? 0;
