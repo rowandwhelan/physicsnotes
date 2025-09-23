@@ -418,21 +418,22 @@ export default function Page() {
     return root ? Array.from(root.querySelectorAll<HTMLElement>('[data-section="cat"]')) : [];
   }, []);
 
-  // Shift+scroll: jump by anchor (immune to tall sections & hit-testing)
+  useLayoutEffect(() => {
+    const h = commandRef.current?.offsetHeight ?? 0;
+    document.documentElement.style.setProperty("--sticky-height", stickyEnabled && stuck ? `${h}px` : "0px");
+  }, [stickyEnabled, stuck]);
+
+  // Shift+scroll: jump by anchor (positions computed fresh each tick)
   useEffect(() => {
-    const LOCK_MS = 240; // absorb coalesced ticks during smooth scroll
+    const LOCK_MS = 240;
     let lockUntil = 0;
 
     function onWheel(e: WheelEvent) {
       if (!e.shiftKey) return;
 
-      const anchors = anchorIndexRef.current;
-      if (!anchors.length) return;
-
-      // prefer horizontal delta for trackpads
+      // prefer horizontal delta (trackpads)
       const raw = Math.abs(e.deltaX) > Math.abs(e.deltaY) ? e.deltaX : e.deltaY;
       if (raw === 0) return;
-
       e.preventDefault();
 
       const now = performance.now();
@@ -441,17 +442,26 @@ export default function Page() {
       const dir: 1 | -1 = raw > 0 ? 1 : -1;
       const step = e.altKey ? 2 : 1;
 
-      // Anchor line at the sticky bar (just under it)
+      // get current anchors (DOM) + their fresh page Y
+      const anchors = Object.values(anchorRefs.current).filter(Boolean) as HTMLSpanElement[];
+      if (!anchors.length) return;
+
+      const pos = anchors.map((a) => ({
+        node: a,
+        y: Math.round(window.scrollY + a.getBoundingClientRect().top),
+      }));
+
+      // anchor line just under sticky bar (current)
       const stickyH = (stickyEnabled && stuck ? commandRef.current?.offsetHeight ?? 0 : 0) + 6;
       const anchorLine = window.scrollY + stickyH + 1;
 
-      // Find current index = last anchor with y <= anchorLine (binary search)
+      // find current index = last pos.y <= anchorLine (binary search)
       let lo = 0,
-        hi = anchors.length - 1,
+        hi = pos.length - 1,
         cur = 0;
       while (lo <= hi) {
         const mid = (lo + hi) >> 1;
-        if (anchors[mid].y <= anchorLine) {
+        if (pos[mid].y <= anchorLine) {
           cur = mid;
           lo = mid + 1;
         } else {
@@ -459,16 +469,11 @@ export default function Page() {
         }
       }
 
-      let next = Math.max(0, Math.min(anchors.length - 1, cur + dir * step));
-      if (next === cur) return; // edge
+      const next = Math.max(0, Math.min(pos.length - 1, cur + dir * step));
+      if (next === cur) return;
 
-      const targetY = anchors[next].y; // already pre-offset by the .cat-anchor CSS
       lockUntil = now + LOCK_MS;
-
-      // Smooth, reliable, and no dead-zones
-      window.scrollTo({ top: targetY, behavior: "smooth" });
-
-      // lightweight unlock in case 'scrollend' doesn't fire
+      window.scrollTo({ top: pos[next].y, behavior: "smooth" });
       window.setTimeout(() => {
         lockUntil = 0;
       }, LOCK_MS + 80);
@@ -597,139 +602,134 @@ export default function Page() {
             return (usage[id] ?? 0) * decay;
           },
         }).map(([cat, list]) => (
-          <>
-            <span
-              className="cat-anchor"
-              data-anchor={cat}
-              ref={(el) => {
-                anchorRefs.current[cat] = el;
-              }}
-            />
-            <section
-              key={cat}
-              data-section="cat"
-              ref={(el) => {
-                sectionRefs.current[cat] = el;
-              }}
-            >
-              <h2 className="mb-4 text-xl font-semibold">{cat}</h2>
-              <div className="grid gap-3 sm:gap-4 md:gap-5 sm:grid-cols-2 lg:grid-cols-3">
-                {list.map((i) => (
-                  <Card key={i.id}>
-                    <div className="flex flex-col">
-                      <div className="flex items-center gap-2">
-                        <h3 className="text-base font-semibold">{i.name}</h3>
-                        {i.symbol && (
-                          <span className="rounded px-2 py-0.5 text-xs" style={{ background: "var(--muted-surface)" }}>
-                            {i.symbol}
-                          </span>
-                        )}
-                      </div>
+          <section
+            key={cat}
+            data-section="cat"
+            ref={(el) => {
+              sectionRefs.current[cat] = el;
+            }}
+          >
+            {/* the tiny anchor lives inside the section */}
+            <span className="cat-anchor" data-anchor={cat} aria-hidden />
+            <h2 className="mb-4 text-xl font-semibold">{cat}</h2>
+            <div className="grid gap-3 sm:gap-4 md:gap-5 sm:grid-cols-2 lg:grid-cols-3">
+              {list.map((i) => (
+                <Card key={i.id}>
+                  <div className="flex flex-col">
+                    <div className="flex items-center gap-2">
+                      <h3 className="text-base font-semibold">{i.name}</h3>
+                      {i.symbol && (
+                        <span className="rounded px-2 py-0.5 text-xs" style={{ background: "var(--muted-surface)" }}>
+                          {i.symbol}
+                        </span>
+                      )}
+                    </div>
 
-                      {i.text && (
-                        <p className="mt-1 text-sm" style={{ color: "var(--muted)" }}>
-                          {i.text}
+                    {i.text && (
+                      <p className="mt-1 text-sm" style={{ color: "var(--muted)" }}>
+                        {i.text}
+                      </p>
+                    )}
+
+                    {/* constants: show LaTeX if enabled & present; ELSE value/units */}
+                    {i.kind === "constant" &&
+                      (prefs.showConstantLatex && i.latex ? (
+                        <div className="mt-2.5">
+                          <MathTex latex={i.latex} label={`${i.name} (${i.id})`} />
+                        </div>
+                      ) : i.value ? (
+                        <p className="mt-1 font-mono text-sm">
+                          {i.value} {i.units ?? ""}
                         </p>
-                      )}
+                      ) : null)}
 
-                      {/* constants: show LaTeX if enabled & present */}
-                      {i.kind === "constant" && prefs.showConstantLatex && i.latex && (
-                        <div className="mt-2.5">
-                          <MathTex latex={i.latex} label={`${i.name} (${i.id})`} />
-                        </div>
-                      )}
+                    {/* equations: always show LaTeX */}
+                    {i.kind === "equation" && i.latex && (
+                      <div className="mt-2.5">
+                        <MathTex latex={i.latex} label={`${i.name} (${i.id})`} />
+                      </div>
+                    )}
 
-                      {/* equations: always show LaTeX */}
-                      {i.kind === "equation" && i.latex && (
-                        <div className="mt-2.5">
-                          <MathTex latex={i.latex} label={`${i.name} (${i.id})`} />
-                        </div>
-                      )}
-
-                      {i.tags?.length > 0 && (
-                        <div className="mt-2 flex flex-wrap gap-1">
-                          {i.tags.map((t) => (
-                            <span
-                              key={t}
-                              className="rounded px-2 py-0.5 text-xs"
-                              style={{ background: "var(--muted-surface)" }}
-                            >
-                              {t}
-                            </span>
-                          ))}
-                        </div>
-                      )}
-                    </div>
-
-                    <div className="mt-3 flex items-center gap-2">
-                      <Button
-                        onClick={() => handleCopy(i, prefs)}
-                        className={clsx(copiedId === i.id && "scale-[0.99]")}
-                      >
-                        {copiedId === i.id ? <Check className="h-4 w-4" /> : <Clipboard className="h-4 w-4" />}
-                        {copiedId === i.id ? "Copied" : "Copy"}
-                      </Button>
-
-                      <Menu
-                        button={
-                          <Button>
-                            <MoreVertical className="h-4 w-4" /> More
-                          </Button>
-                        }
-                      >
-                        <button
-                          className="block w-full rounded px-3 py-2 text-left text-sm hover:[background:var(--elevated-hover)]"
-                          onClick={() => {
-                            const m = setPrefs({ copyPreset: "latex_inline" });
-                            setLocalPrefs(m);
-                            handleCopy(i, m);
-                          }}
-                        >
-                          Copy as LaTeX (inline)
-                        </button>
-                        <button
-                          className="block w-full rounded px-3 py-2 text-left text-sm hover:[background:var(--elevated-hover)]"
-                          onClick={() => {
-                            const m = setPrefs({ copyPreset: "markdown_inline" });
-                            setLocalPrefs(m);
-                            handleCopy(i, m);
-                          }}
-                        >
-                          Copy as Markdown (inline)
-                        </button>
-                        <button
-                          className="block w-full rounded px-3 py-2 text-left text-sm hover:[background:var(--elevated-hover)]"
-                          onClick={() => {
-                            const m = setPrefs({ copyPreset: "plain_compact" });
-                            setLocalPrefs(m);
-                            handleCopy(i, m);
-                          }}
-                        >
-                          Copy as Plain (compact)
-                        </button>
-                        {i.kind === "constant" && (
-                          <button
-                            className="block w-full rounded px-3 py-2 text-left text-sm hover:[background:var(--elevated-hover)]"
-                            onClick={async () => {
-                              const text = i.value ? `${i.value}${i.units ? ` ${i.units}` : ""}` : "";
-                              await navigator.clipboard.writeText(text);
-                              storage.markUsed(i.id);
-                              if (prefs.instantRerankOnCopy) setRerankPulse((x) => x + 1);
-                              setCopiedId(i.id);
-                              toast("Copied value");
-                              setTimeout(() => setCopiedId((x) => (x === i.id ? null : x)), 900);
-                            }}
+                    {i.tags?.length > 0 && (
+                      <div className="mt-2 flex flex-wrap gap-1">
+                        {i.tags.map((t) => (
+                          <span
+                            key={t}
+                            className="rounded px-2 py-0.5 text-xs"
+                            style={{ background: "var(--muted-surface)" }}
                           >
-                            Copy value only
-                          </button>
-                        )}
-                      </Menu>
-                    </div>
-                  </Card>
-                ))}
-              </div>
-            </section>
-          </>
+                            {t}
+                          </span>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="mt-3 flex items-center gap-2">
+                    <Button onClick={() => handleCopy(i, prefs)} className={clsx(copiedId === i.id && "scale-[0.99]")}>
+                      {copiedId === i.id ? <Check className="h-4 w-4" /> : <Clipboard className="h-4 w-4" />}
+                      {copiedId === i.id ? "Copied" : "Copy"}
+                    </Button>
+
+                    <Menu
+                      button={
+                        <Button>
+                          <MoreVertical className="h-4 w-4" /> More
+                        </Button>
+                      }
+                    >
+                      <button
+                        className="block w-full rounded px-3 py-2 text-left text-sm hover:[background:var(--elevated-hover)]"
+                        onClick={() => {
+                          const m = setPrefs({ copyPreset: "latex_inline" });
+                          setLocalPrefs(m);
+                          handleCopy(i, m);
+                        }}
+                      >
+                        Copy as LaTeX (inline)
+                      </button>
+                      <button
+                        className="block w-full rounded px-3 py-2 text-left text-sm hover:[background:var(--elevated-hover)]"
+                        onClick={() => {
+                          const m = setPrefs({ copyPreset: "markdown_inline" });
+                          setLocalPrefs(m);
+                          handleCopy(i, m);
+                        }}
+                      >
+                        Copy as Markdown (inline)
+                      </button>
+                      <button
+                        className="block w-full rounded px-3 py-2 text-left text-sm hover:[background:var(--elevated-hover)]"
+                        onClick={() => {
+                          const m = setPrefs({ copyPreset: "plain_compact" });
+                          setLocalPrefs(m);
+                          handleCopy(i, m);
+                        }}
+                      >
+                        Copy as Plain (compact)
+                      </button>
+                      {i.kind === "constant" && (
+                        <button
+                          className="block w-full rounded px-3 py-2 text-left text-sm hover:[background:var(--elevated-hover)]"
+                          onClick={async () => {
+                            const text = i.value ? `${i.value}${i.units ? ` ${i.units}` : ""}` : "";
+                            await navigator.clipboard.writeText(text);
+                            storage.markUsed(i.id);
+                            if (prefs.instantRerankOnCopy) setRerankPulse((x) => x + 1);
+                            setCopiedId(i.id);
+                            toast("Copied value");
+                            setTimeout(() => setCopiedId((x) => (x === i.id ? null : x)), 900);
+                          }}
+                        >
+                          Copy value only
+                        </button>
+                      )}
+                    </Menu>
+                  </div>
+                </Card>
+              ))}
+            </div>
+          </section>
         ))}
       </section>
 

@@ -1,53 +1,56 @@
 "use client";
-import { useEffect, useMemo, useState } from "react";
+
+import { useMemo } from "react";
 import katex from "katex";
 import "katex/dist/katex.min.css";
 
 function sanitizeDanglingSubSup(s: string) {
-  // 1) remove trailing _ or ^ at end of string
+  // trim trailing _ or ^
   s = s.replace(/[_^]\s*$/g, "");
-  // 2) fix “_ ” or “^ ” (underscore/caret followed by only whitespace then a delimiter)
-  s = s.replace(/_([\s}])/, "_{ }$1").replace(/\^([\s}])/, "^{ }$1");
-  // 3) fix underscore/caret immediately before punctuation/newline
-  s = s.replace(/_([.,;:\n\r])/g, "_{ }$1").replace(/\^([.,;:\n\r])/g, "^{ }$1");
+  // wrap lone _ or ^ before whitespace/brace/punct
+  s = s.replace(/_([\s}.,;:\n\r])/g, "_{ }$1").replace(/\^([\s}.,;:\n\r])/g, "^{ }$1");
   return s;
 }
 
-export default function MathTex({
-  latex,
-  inline = false,
-  label,
-}: {
-  latex: string;
-  inline?: boolean;
-  /** optional: pass item name/id for better error logs */
-  label?: string;
-}) {
-  const [html, setHtml] = useState<string>("");
+export default function MathTex({ latex, inline, label }: { latex: string; inline?: boolean; label?: string }) {
+  const { html, isBlock } = useMemo(() => {
+    const detectedBlock = inline === undefined ? /^\s*\$\$[\s\S]*\$\$\s*$/.test(latex) : !inline;
 
-  const safe = useMemo(() => sanitizeDanglingSubSup(latex ?? ""), [latex]);
+    const src0 = detectedBlock ? latex.replace(/^\s*\$\$|\$\$\s*$/g, "") : latex;
+    const src = sanitizeDanglingSubSup(src0);
 
-  useEffect(() => {
-    try {
-      const out = katex.renderToString(safe, {
-        displayMode: !inline,
-        // Avoid MathML generation that triggers those console warnings
-        output: "html",
+    return {
+      isBlock: detectedBlock,
+      html: katex.renderToString(src, {
+        displayMode: detectedBlock,
+        output: "html", // ← no MathML (avoids <msub/> warnings)
         throwOnError: false,
-        strict: "ignore", // don’t spam console for minor issues
-        trust: false,
-      });
-      setHtml(out);
-    } catch (err) {
-      console.warn("[MathTex] render error", { label, latex, sanitized: safe, err });
-      // graceful fallback so UI stays usable
-      setHtml(`<code class="code-block">${escapeHtml(latex ?? "")}</code>`);
-    }
-  }, [safe, inline, latex, label]);
+        strict: "ignore",
+        trust: true,
+        macros: {},
+      }),
+    };
+  }, [latex, inline, label]);
 
-  return <span className={inline ? "" : "block"} dangerouslySetInnerHTML={{ __html: html }} />;
-}
-
-function escapeHtml(s: string) {
-  return s.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
+  return (
+    <>
+      {/* wrapper class is .mathtex (KaTeX still emits its own .katex inside) */}
+      <span className="mathtex" data-display={isBlock ? "true" : "false"} dangerouslySetInnerHTML={{ __html: html }} />
+      <style jsx global>{`
+        /* line up with your card text */
+        .mathtex .katex-display {
+          margin: 0 !important;
+          text-align: left !important;
+        }
+        .mathtex .katex-display > .katex {
+          display: inline-block !important;
+        }
+        /* size like your “old” look – bump it a bit; tune with --mathtex-scale */
+        .mathtex .katex {
+          font-size: var(--mathtex-scale, 1.3em) !important;
+          line-height: 1.2 !important;
+        }
+      `}</style>
+    </>
+  );
 }
