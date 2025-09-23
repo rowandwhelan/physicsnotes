@@ -405,7 +405,7 @@ export default function Page() {
 
   // Shift+scroll: jump by anchor (positions computed fresh each tick)
   useEffect(() => {
-    const LOCK_MS = 240;
+    const LOCK_MS = 180;
     let lockUntil = 0;
 
     function onWheel(e: WheelEvent) {
